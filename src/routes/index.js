@@ -1,0 +1,48 @@
+const express = require("express");
+const router = express.Router();
+
+const authRoutes = require("./auth");
+const clientRoutes = require("./clients");
+const productRoutes = require("./products");
+const stockRoutes = require("./stock");
+const salesRoutes = require("./sales");
+const purchaseRoutes = require("./purchases");
+const billingRoutes = require("./billing");
+const expenseRoutes = require("./expenses");
+const cuttingRoutes = require("./cutting");
+const deliveryRoutes = require("./deliveries");
+const wastageRoutes = require("./wastage");
+const reportRoutes = require("./reports");
+const dynamicRoutes = require("./dynamic");
+const productCategoryRoutes = require("./productCategories");
+const warehouseRoutes = require("./warehouses");
+const financeRoutes = require("./finance");
+const supplyChainRoutes = require("./supplyChain");
+const salaryRoutes = require("./salary");
+const notificationRoutes = require("./notifications");
+const periodClosingRoutes = require("./periodClosing");
+const usersRoutes = require("./users");
+
+router.use("/auth", authRoutes);
+router.use("/clients", clientRoutes);
+router.use("/products", productRoutes);
+router.use("/stock", stockRoutes);
+router.use("/sales", salesRoutes);
+router.use("/purchases", purchaseRoutes);
+router.use("/product-categories", productCategoryRoutes);
+router.use("/warehouses", warehouseRoutes);
+router.use("/billing", billingRoutes);
+router.use("/expenses", expenseRoutes);
+router.use("/cutting", cuttingRoutes);
+router.use("/deliveries", deliveryRoutes);
+router.use("/wastage", wastageRoutes);
+router.use("/reports", reportRoutes);
+router.use("/dynamic", dynamicRoutes);
+router.use("/finance", financeRoutes);
+router.use("/supply-chain", supplyChainRoutes);
+router.use("/salary", salaryRoutes);
+router.use("/notifications", notificationRoutes);
+router.use("/period-closing", periodClosingRoutes);
+router.use("/users", usersRoutes);
+
+module.exports = router;

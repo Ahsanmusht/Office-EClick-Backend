@@ -2,19 +2,20 @@ const express = require('express');
 const router = express.Router();
 const SalaryController = require('../controllers/SalaryController');
 const auth = require('../middleware/auth');
+const { checkPermission } = require('../middleware/permissions');
 
 // Salary Management
-router.get('/salaries', auth, SalaryController.getSalaries);
-router.post('/salaries/generate', auth, SalaryController.generateMonthlySalaries);
-router.put('/salaries/:id', auth, SalaryController.updateSalary);
-router.post('/salaries/:id/pay', auth, SalaryController.paySalary);
-router.get('/salaries/report', auth, SalaryController.getSalaryReport);
+router.get('/salaries', auth, checkPermission('salary.view'), SalaryController.getSalaries);
+router.post('/salaries/generate', auth, checkPermission('salary.generate'), SalaryController.generateMonthlySalaries);
+router.put('/salaries/:id', auth, checkPermission('salary.generate'), SalaryController.updateSalary);
+router.post('/salaries/:id/pay', auth, checkPermission('salary.pay'), SalaryController.paySalary);
+router.get('/salaries/report', auth, checkPermission('salary.view'), SalaryController.getSalaryReport);
 
-// Recurring Expenses
-router.get('/recurring-schedules', auth, SalaryController.getRecurringSchedules);
-router.post('/recurring-schedules', auth, SalaryController.createRecurringSchedule);
-router.put('/recurring-schedules/:id', auth, SalaryController.updateRecurringSchedule);
-router.post('/recurring-schedules/process', auth, SalaryController.processRecurringExpenses);
-router.get('/recurring-schedules/upcoming', auth, SalaryController.getUpcomingRecurringExpenses);
+// Recurring Expenses - Finance permission chahiye
+router.get('/recurring-schedules', auth, checkPermission('expenses.view'), SalaryController.getRecurringSchedules);
+router.post('/recurring-schedules', auth, checkPermission('expenses.create'), SalaryController.createRecurringSchedule);
+router.put('/recurring-schedules/:id', auth, checkPermission('expenses.create'), SalaryController.updateRecurringSchedule);
+router.post('/recurring-schedules/process', auth, checkPermission('expenses.approve'), SalaryController.processRecurringExpenses);
+router.get('/recurring-schedules/upcoming', auth, checkPermission('expenses.view'), SalaryController.getUpcomingRecurringExpenses);
 
 module.exports = router;

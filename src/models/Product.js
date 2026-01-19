@@ -1,9 +1,38 @@
-const BaseModel = require('./BaseModel');
-const { executeQuery } = require('../config/database');
+const BaseModel = require("./BaseModel");
+const { executeQuery } = require("../config/database");
 
 class Product extends BaseModel {
   constructor() {
-    super('products');
+    super("products");
+  }
+
+  async findAll({
+    limit = 100,
+    offset = 0,
+    where = "1=1",
+    params = [],
+    orderBy = "created_at DESC",
+  } = {}) {
+    const sql = `
+      SELECT 
+        p.*,
+        pc.name as category_name,
+        w.name as warehouse_name,
+        w.id as warehouse_id
+      FROM products p
+      LEFT JOIN product_categories pc ON p.category_id = pc.id
+      LEFT JOIN stock s ON p.id = s.product_id
+      LEFT JOIN warehouses w ON s.warehouse_id = w.id
+      WHERE p.${where}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `;
+
+    return await executeQuery(sql, [
+      ...params,
+      parseInt(limit),
+      parseInt(offset),
+    ]);
   }
 
   async findWithCategory(id) {
@@ -22,13 +51,13 @@ class Product extends BaseModel {
                FROM products p
                LEFT JOIN product_categories pc ON p.category_id = pc.id
                LEFT JOIN stock s ON p.id = s.product_id`;
-    
+
     if (warehouseId) {
       sql += ` AND s.warehouse_id = ?`;
     }
-    
+
     sql += ` WHERE p.is_active = 1 GROUP BY p.id ORDER BY p.name`;
-    
+
     return await executeQuery(sql, warehouseId ? [warehouseId] : []);
   }
 
@@ -36,16 +65,16 @@ class Product extends BaseModel {
     let sql = `SELECT p.*, COALESCE(SUM(s.available_quantity), 0) as current_stock
                FROM products p
                LEFT JOIN stock s ON p.id = s.product_id`;
-    
+
     if (warehouseId) {
       sql += ` AND s.warehouse_id = ?`;
     }
-    
+
     sql += ` WHERE p.is_active = 1
              GROUP BY p.id
              HAVING current_stock <= p.reorder_level
              ORDER BY current_stock ASC`;
-    
+
     return await executeQuery(sql, warehouseId ? [warehouseId] : []);
   }
 }

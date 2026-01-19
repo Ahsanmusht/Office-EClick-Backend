@@ -125,7 +125,7 @@ class PurchaseController {
       // Update stock for received items
       for (const receivedItem of received_items) {
         const orderItem = items.find(
-          (i) => i.product_id === receivedItem.product_id
+          (i) => i.product_id === receivedItem.product_id,
         );
 
         if (orderItem) {
@@ -138,7 +138,7 @@ class PurchaseController {
               reference_type: "purchase_order",
               reference_id: id,
               created_by: req.user?.id,
-            }
+            },
           );
         }
       }
@@ -152,32 +152,88 @@ class PurchaseController {
     }
   }
 
+  // async getOrders(req, res, next) {
+  //   try {
+  //     const { limit = 20, offset = 0, status, supplier_id } = req.query;
+
+  //     let where = "1=1";
+  //     let params = [];
+
+  //     if (status) {
+  //       where += " AND status = ?";
+  //       params.push(status);
+  //     }
+
+  //     if (supplier_id) {
+  //       where += " AND supplier_id = ?";
+  //       params.push(supplier_id);
+  //     }
+
+  //     const orders = await PurchaseOrder.findAll({
+  //       limit,
+  //       offset,
+  //       where,
+  //       params,
+  //       orderBy: "order_date DESC",
+  //     });
+
+  //     const total = await PurchaseOrder.count(where, params);
+
+  //     res.json({ success: true, data: { orders, total } });
+  //   } catch (error) {
+  //     next(error);
+  //   }
+  // }
+
   async getOrders(req, res, next) {
     try {
-      const { limit = 20, offset = 0, status, supplier_id } = req.query;
+      const {
+        limit = 20,
+        offset = 0,
+        status,
+        supplier_id,
+        warehouse_id,
+      } = req.query;
 
       let where = "1=1";
       let params = [];
 
       if (status) {
-        where += " AND status = ?";
+        where += " AND po.status = ?";
         params.push(status);
       }
 
       if (supplier_id) {
-        where += " AND supplier_id = ?";
+        where += " AND po.supplier_id = ?";
         params.push(supplier_id);
       }
 
-      const orders = await PurchaseOrder.findAll({
-        limit,
-        offset,
-        where,
-        params,
-        orderBy: "order_date DESC",
-      });
+      if (warehouse_id) {
+        where += " AND po.warehouse_id = ?";
+        params.push(warehouse_id);
+      }
 
-      const total = await PurchaseOrder.count(where, params);
+      const sql = `
+      SELECT 
+        po.*,
+        c.contact_person AS supplier_name,
+        w.name AS warehouse_name
+      FROM purchase_orders po
+      LEFT JOIN clients c ON po.supplier_id = c.id
+      LEFT JOIN warehouses w ON po.warehouse_id = w.id
+      WHERE ${where}
+      ORDER BY po.order_date DESC
+      LIMIT ? OFFSET ?
+    `;
+
+      const orders = await executeQuery(sql, [...params, limit, offset]);
+
+      const totalSql = `
+      SELECT COUNT(*) as total
+      FROM purchase_orders po
+      WHERE ${where}
+    `;
+      const [{ total }] = await executeQuery(totalSql, params);
 
       res.json({ success: true, data: { orders, total } });
     } catch (error) {

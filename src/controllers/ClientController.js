@@ -38,7 +38,7 @@ class ClientController {
     }
   }
 
-  async getById(req, res, next) {
+  getById = async(req, res, next) => {
     try {
       const { id } = req.params;
       const client = await Client.findById(id);
@@ -147,7 +147,7 @@ class ClientController {
     }
   }
 
-  async getClientStats(clientId) {
+  getClientStats = async(clientId) => {
     const sql = `
       SELECT 
         (SELECT COUNT(*) FROM purchase_orders WHERE supplier_id = ? AND status != 'cancelled') as total_purchases,

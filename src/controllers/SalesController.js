@@ -8,7 +8,8 @@ const SalesOrderItem = new BaseModel("sales_order_items");
 class SalesController {
   async createOrder(req, res, next) {
     try {
-      const { customer_id, warehouse_id, items, ...orderData } = req.body;
+      const { customer_id, warehouse_id, delivery_date, items, ...orderData } =
+        req.body;
 
       const queries = [];
 
@@ -34,13 +35,14 @@ class SalesController {
       // Create order
       queries.push({
         sql: `INSERT INTO sales_orders 
-              (order_number, customer_id, warehouse_id, order_date, subtotal, 
+              (order_number, customer_id, warehouse_id, order_date, delivery_date, subtotal, 
                tax_amount, total_amount, status, created_by)
-              VALUES (?, ?, ?, CURDATE(), ?, ?, ?, 'draft', ?)`,
+              VALUES (?, ?, ?, CURDATE(), ?, ?, ?, ?, 'draft', ?)`,
         params: [
           orderNumber,
           customer_id,
           warehouse_id,
+          delivery_date || null,
           subtotal,
           tax_amount,
           total_amount,
@@ -99,7 +101,7 @@ class SalesController {
           order.warehouse_id,
           -item.quantity,
           "sale",
-          { reference_type: "sales_order", reference_id: id }
+          { reference_type: "sales_order", reference_id: id },
         );
       }
 
@@ -112,25 +114,81 @@ class SalesController {
     }
   }
 
+  // async getOrders(req, res, next) {
+  //   try {
+  //     const { limit = 20, offset = 0, status, customer_id } = req.query;
+
+  //     let where = "1=1";
+  //     let params = [];
+
+  //     if (status) {
+  //       where += " AND status = ?";
+  //       params.push(status);
+  //     }
+
+  //     if (customer_id) {
+  //       where += " AND customer_id = ?";
+  //       params.push(customer_id);
+  //     }
+
+  //     const orders = await SalesOrder.findAll({ limit, offset, where, params });
+  //     const total = await SalesOrder.count(where, params);
+
+  //     res.json({ success: true, data: { orders, total } });
+  //   } catch (error) {
+  //     next(error);
+  //   }
+  // }
+
   async getOrders(req, res, next) {
     try {
-      const { limit = 20, offset = 0, status, customer_id } = req.query;
+      const {
+        limit = 20,
+        offset = 0,
+        status,
+        customer_id,
+        warehouse_id,
+      } = req.query;
 
       let where = "1=1";
       let params = [];
 
       if (status) {
-        where += " AND status = ?";
+        where += " AND so.status = ?";
         params.push(status);
       }
 
       if (customer_id) {
-        where += " AND customer_id = ?";
+        where += " AND so.customer_id = ?";
         params.push(customer_id);
       }
 
-      const orders = await SalesOrder.findAll({ limit, offset, where, params });
-      const total = await SalesOrder.count(where, params);
+      if (warehouse_id) {
+        where += " AND so.warehouse_id = ?";
+        params.push(warehouse_id);
+      }
+
+      const sql = `
+      SELECT 
+        so.*,
+        c.contact_person AS customer_name,
+        w.name AS warehouse_name
+      FROM sales_orders so
+      LEFT JOIN clients c ON so.customer_id = c.id
+      LEFT JOIN warehouses w ON so.warehouse_id = w.id
+      WHERE ${where}
+      ORDER BY so.id DESC
+      LIMIT ? OFFSET ?
+    `;
+
+      const orders = await executeQuery(sql, [...params, limit, offset]);
+
+      const totalSql = `
+      SELECT COUNT(*) as total
+      FROM sales_orders so
+      WHERE ${where}
+    `;
+      const [{ total }] = await executeQuery(totalSql, params);
 
       res.json({ success: true, data: { orders, total } });
     } catch (error) {

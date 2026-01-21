@@ -78,6 +78,119 @@ class SalesController {
     }
   }
 
+  async updateOrder(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { items, ...orderData } = req.body;
+
+      const order = await SalesOrder.findById(id);
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          error: "Order not found",
+        });
+      }
+
+      if (order.status !== "draft") {
+        return res.status(400).json({
+          success: false,
+          error: "Only draft orders can be edited",
+        });
+      }
+
+      // Update order details
+      if (orderData) {
+        await SalesOrder.update(id, orderData);
+      }
+
+      // Update items if provided
+      if (items && items.length > 0) {
+        // Delete existing items
+        await executeQuery(
+          "DELETE FROM sales_order_items WHERE sales_order_id = ?",
+          [id],
+        );
+
+        // Insert new items
+        const itemQueries = items.map((item) => ({
+          sql: `INSERT INTO sales_order_items 
+                (sales_order_id, product_id, quantity, unit_price, tax_rate, discount_rate)
+                VALUES (?, ?, ?, ?, ?, ?)`,
+          params: [
+            id,
+            item.product_id,
+            item.quantity,
+            item.unit_price,
+            item.tax_rate || 0,
+            item.discount_rate || 0,
+          ],
+        }));
+
+        await executeTransaction(itemQueries);
+      }
+
+      const updatedOrder = await SalesOrder.findById(id);
+      res.json({ success: true, data: updatedOrder });
+    } catch (error) {
+      next(error);
+    }
+  }
+  async cancelOrder(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { cancellation_reason } = req.body;
+
+      const order = await SalesOrder.findById(id);
+      if (!order) {
+        return res.status(404).json({
+          success: false,
+          error: "Order not found",
+        });
+      }
+
+      // Only confirmed orders should restore stock
+      const shouldRestoreStock = order.status === "confirmed";
+
+      if (shouldRestoreStock) {
+        // Get order items
+        const itemsSql = `SELECT * FROM sales_order_items WHERE sales_order_id = ?`;
+        const items = await executeQuery(itemsSql, [id]);
+
+        // Restore stock for each item
+        for (const item of items) {
+          await Stock.updateStock(
+            item.product_id,
+            order.warehouse_id,
+            item.quantity, // Positive to add back
+            "sale",
+            {
+              reference_type: "sales_order_cancelled",
+              reference_id: id,
+              created_by: req.user?.id,
+              notes: `Sale Order ${order.order_number} cancelled: ${cancellation_reason || "No reason provided"}`,
+            },
+          );
+        }
+      }
+
+      // Update order status
+      await SalesOrder.update(id, {
+        status: "cancelled",
+        notes: cancellation_reason || order.notes,
+        updated_at: new Date(),
+      });
+
+      res.json({
+        success: true,
+        message: shouldRestoreStock
+          ? "Order cancelled and stock restored successfully"
+          : "Order cancelled successfully",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async confirmOrder(req, res, next) {
     try {
       const { id } = req.params;

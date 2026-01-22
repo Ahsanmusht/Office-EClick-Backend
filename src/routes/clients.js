@@ -1,17 +1,15 @@
+// src/routes/clients.js - UPDATED
 const express = require('express');
 const router = express.Router();
-const ClientController = require('../controllers/ClientController');
+const UpdatedClientController = require('../controllers/ClientController');
 const auth = require('../middleware/auth');
-const { checkPermission } = require('../middleware/permissions');
 
-router.get('/', auth, checkPermission('clients.view'), ClientController.getAll);
-router.get('/suppliers', auth, checkPermission('clients.view'), ClientController.getSuppliers);
-router.get('/customers', auth, checkPermission('clients.view'), ClientController.getCustomers);
-router.get('/:id', auth, checkPermission('clients.view'), ClientController.getById);
-router.get('/:id/transactions', auth, checkPermission('clients.view'), ClientController.getClientTransactions);
-
-router.post('/', auth, checkPermission('clients.create'), ClientController.create);
-router.put('/:id', auth, checkPermission('clients.edit'), ClientController.update);
-router.delete('/:id', auth, checkPermission('clients.delete'), ClientController.delete);
+router.get('/', UpdatedClientController.getAll);
+router.get('/outstanding-balances', UpdatedClientController.getOutstandingBalances);
+router.get('/:id', UpdatedClientController.getById);
+router.get('/:id/statement', UpdatedClientController.getClientStatement);
+router.post('/', auth, UpdatedClientController.create);
+router.put('/:id', auth, UpdatedClientController.update);
+router.delete('/:id', auth, UpdatedClientController.delete);
 
 module.exports = router;

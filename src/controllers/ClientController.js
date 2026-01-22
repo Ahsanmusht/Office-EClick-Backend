@@ -1,12 +1,14 @@
+// src/controllers/UpdatedClientController.js
 const BaseModel = require("../models/BaseModel");
 const { executeQuery } = require("../config/database");
 
 const Client = new BaseModel("clients");
 
-class ClientController {
+class UpdatedClientController {
+  
   async getAll(req, res, next) {
     try {
-      const { limit = 20, offset = 0, client_type, search } = req.query;
+      const { limit = 20, offset = 0, client_type, search, has_balance } = req.query;
 
       let where = "is_active = 1";
       let params = [];
@@ -20,6 +22,10 @@ class ClientController {
         where +=
           " AND (company_name LIKE ? OR contact_person LIKE ? OR client_code LIKE ?)";
         params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+      }
+
+      if (has_balance === 'true') {
+        where += ' AND balance != 0';
       }
 
       const clients = await Client.findAll({
@@ -38,10 +44,23 @@ class ClientController {
     }
   }
 
-  getById = async(req, res, next) => {
+  async getById(req, res, next) {
     try {
       const { id } = req.params;
-      const client = await Client.findById(id);
+      
+      const sql = `
+        SELECT c.*,
+               CASE 
+                 WHEN c.client_type = 'customer' AND c.balance > 0 THEN 'receivable'
+                 WHEN c.client_type = 'supplier' AND c.balance > 0 THEN 'payable'
+                 WHEN c.balance < 0 THEN 'advance'
+                 ELSE 'clear'
+               END as balance_status
+        FROM clients c
+        WHERE c.id = ?
+      `;
+      
+      const [client] = await executeQuery(sql, [id]);
 
       if (!client) {
         return res.status(404).json({
@@ -50,10 +69,35 @@ class ClientController {
         });
       }
 
-      // Get client statistics
-      const stats = await this.getClientStats(id);
+      // Get petty cash transactions
+      const transactionsSql = `
+        SELECT * FROM petty_cash 
+        WHERE client_id = ? 
+        ORDER BY transaction_date DESC 
+        LIMIT 10
+      `;
+      const transactions = await executeQuery(transactionsSql, [id]);
 
-      res.json({ success: true, data: { ...client, stats } });
+      // Get summary
+      const summarySql = `
+        SELECT 
+          COUNT(*) as total_transactions,
+          SUM(CASE WHEN transaction_type = 'cash_in' THEN amount ELSE 0 END) as total_received,
+          SUM(CASE WHEN transaction_type = 'cash_out' THEN amount ELSE 0 END) as total_paid
+        FROM petty_cash
+        WHERE client_id = ?
+      `;
+      const [summary] = await executeQuery(summarySql, [id]);
+
+      res.json({ 
+        success: true, 
+        data: { 
+          ...client, 
+          recent_transactions: transactions,
+          transaction_summary: summary
+        } 
+      });
+      
     } catch (error) {
       next(error);
     }
@@ -67,6 +111,9 @@ class ClientController {
         req.body.client_code = `${prefix}-${Date.now()}`;
       }
 
+      // Balance starts at 0
+      req.body.balance = 0;
+
       const client = await Client.create(req.body);
       res.status(201).json({ success: true, data: client });
     } catch (error) {
@@ -77,6 +124,10 @@ class ClientController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
+      
+      // Don't allow direct balance update through this endpoint
+      delete req.body.balance;
+      
       const client = await Client.update(id, req.body);
 
       if (!client) {
@@ -95,6 +146,20 @@ class ClientController {
   async delete(req, res, next) {
     try {
       const { id } = req.params;
+      
+      // Check if client has balance
+      const [client] = await executeQuery(
+        'SELECT balance FROM clients WHERE id = ?',
+        [id]
+      );
+
+      if (client && client.balance != 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete client with pending balance: ${client.balance}`
+        });
+      }
+
       // Soft delete
       await Client.update(id, { is_active: 0 });
       res.json({ success: true, message: "Client deleted successfully" });
@@ -103,111 +168,199 @@ class ClientController {
     }
   }
 
-  async getSuppliers(req, res, next) {
+  // Get all clients with outstanding balance
+  async getOutstandingBalances(req, res, next) {
     try {
-      const { limit = 20, offset = 0 } = req.query;
+      const { client_type } = req.query;
 
-      const where =
-        'is_active = 1 AND (client_type = "supplier" OR client_type = "both")';
+      let where = 'is_active = 1 AND balance != 0';
+      let params = [];
 
-      const suppliers = await Client.findAll({
-        limit,
-        offset,
-        where,
-        orderBy: "company_name ASC",
-      });
-
-      const total = await Client.count(where);
-
-      res.json({ success: true, data: { suppliers, total } });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async getCustomers(req, res, next) {
-    try {
-      const { limit = 20, offset = 0 } = req.query;
-
-      const where =
-        'is_active = 1 AND (client_type = "customer" OR client_type = "both")';
-
-      const customers = await Client.findAll({
-        limit,
-        offset,
-        where,
-        orderBy: "company_name ASC",
-      });
-
-      const total = await Client.count(where);
-
-      res.json({ success: true, data: { customers, total } });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  getClientStats = async(clientId) => {
-    const sql = `
-      SELECT 
-        (SELECT COUNT(*) FROM purchase_orders WHERE supplier_id = ? AND status != 'cancelled') as total_purchases,
-        (SELECT COUNT(*) FROM sales_orders WHERE customer_id = ? AND status != 'cancelled') as total_sales,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE client_id = ? AND invoice_type = 'purchase') as total_purchase_amount,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM invoices WHERE client_id = ? AND invoice_type = 'sales') as total_sales_amount,
-        (SELECT COALESCE(SUM(balance_amount), 0) FROM invoices WHERE client_id = ? AND status != 'paid') as outstanding_balance
-    `;
-
-    const [stats] = await executeQuery(sql, [
-      clientId,
-      clientId,
-      clientId,
-      clientId,
-      clientId,
-    ]);
-    return stats;
-  }
-
-  async getClientTransactions(req, res, next) {
-    try {
-      const { id } = req.params;
-      const { limit = 20, offset = 0 } = req.query;
+      if (client_type) {
+        where += ' AND client_type = ?';
+        params.push(client_type);
+      }
 
       const sql = `
         SELECT 
-          'invoice' as type,
-          i.id,
-          i.invoice_number as reference,
-          i.invoice_date as date,
-          i.total_amount,
-          i.balance_amount,
-          i.status
-        FROM invoices i
-        WHERE i.client_id = ?
+          id,
+          client_code,
+          company_name,
+          client_type,
+          balance,
+          CASE 
+            WHEN client_type = 'customer' AND balance > 0 THEN 'receivable'
+            WHEN client_type = 'supplier' AND balance > 0 THEN 'payable'
+            ELSE 'advance'
+          END as balance_status
+        FROM clients
+        WHERE ${where}
+        ORDER BY ABS(balance) DESC
+      `;
+
+      const clients = await executeQuery(sql, params);
+
+      // Calculate totals
+      const totals = {
+        total_receivables: 0,
+        total_payables: 0,
+        net_position: 0
+      };
+
+      clients.forEach(client => {
+        const balance = parseFloat(client.balance);
+        if (client.client_type === 'customer' && balance > 0) {
+          totals.total_receivables += balance;
+        } else if (client.client_type === 'supplier' && balance > 0) {
+          totals.total_payables += balance;
+        }
+      });
+
+      totals.net_position = totals.total_receivables - totals.total_payables;
+
+      res.json({ 
+        success: true, 
+        data: { 
+          clients,
+          totals
+        } 
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Get client statement (ledger)
+  async getClientStatement(req, res, next) {
+    try {
+      const { id } = req.params;
+      const { start_date, end_date } = req.query;
+
+      const [client] = await executeQuery(
+        'SELECT * FROM clients WHERE id = ?',
+        [id]
+      );
+
+      if (!client) {
+        return res.status(404).json({
+          success: false,
+          error: 'Client not found'
+        });
+      }
+
+      // Get opening balance
+      let openingBalance = 0;
+      if (start_date) {
+        const sql = `
+          SELECT balance FROM clients WHERE id = ?
+        `;
+        // This is simplified - in production you'd calculate from transactions
+        const [balance] = await executeQuery(sql, [id]);
+        openingBalance = parseFloat(balance.balance || 0);
+      }
+
+      // Get all transactions
+      let dateFilter = '';
+      let params = [id];
+
+      if (start_date && end_date) {
+        dateFilter = 'AND transaction_date BETWEEN ? AND ?';
+        params.push(start_date, end_date);
+      }
+
+      // Combine purchase/sales and petty cash
+      const sql = `
+        SELECT 
+          'purchase' as type,
+          po.po_number as reference,
+          po.order_date as date,
+          po.total_amount as amount,
+          'debit' as entry_type,
+          po.id as ref_id
+        FROM purchase_orders po
+        WHERE po.supplier_id = ? ${dateFilter}
+        
+        UNION ALL
+        
+        SELECT 
+          'sale' as type,
+          so.order_number as reference,
+          so.order_date as date,
+          so.total_amount as amount,
+          'credit' as entry_type,
+          so.id as ref_id
+        FROM sales_orders so
+        WHERE so.customer_id = ? ${dateFilter}
         
         UNION ALL
         
         SELECT 
           'payment' as type,
-          p.id,
-          p.payment_number as reference,
-          p.payment_date as date,
-          p.amount as total_amount,
-          0 as balance_amount,
-          'completed' as status
-        FROM payments p
-        WHERE p.client_id = ?
+          pc.transaction_number as reference,
+          pc.transaction_date as date,
+          pc.amount,
+          CASE 
+            WHEN pc.transaction_type = 'cash_in' THEN 'credit'
+            ELSE 'debit'
+          END as entry_type,
+          pc.id as ref_id
+        FROM petty_cash pc
+        WHERE pc.client_id = ? ${dateFilter}
         
-        ORDER BY date DESC
-        LIMIT ? OFFSET ?
+        ORDER BY date ASC
       `;
 
-      const transactions = await executeQuery(sql, [id, id, limit, offset]);
+      const transactions = await executeQuery(sql, [
+        ...params,
+        ...params,
+        ...params
+      ]);
 
-      res.json({ success: true, data: transactions });
+      // Calculate running balance
+      let runningBalance = openingBalance;
+      const statement = transactions.map(txn => {
+        if (client.client_type === 'customer') {
+          // For customer: sale increases balance, payment decreases
+          if (txn.type === 'sale') {
+            runningBalance += parseFloat(txn.amount);
+          } else if (txn.type === 'payment') {
+            runningBalance -= parseFloat(txn.amount);
+          }
+        } else {
+          // For supplier: purchase increases balance, payment decreases
+          if (txn.type === 'purchase') {
+            runningBalance += parseFloat(txn.amount);
+          } else if (txn.type === 'payment') {
+            runningBalance -= parseFloat(txn.amount);
+          }
+        }
+
+        return {
+          ...txn,
+          running_balance: runningBalance.toFixed(2)
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          client: {
+            id: client.id,
+            code: client.client_code,
+            name: client.company_name,
+            type: client.client_type
+          },
+          opening_balance: openingBalance,
+          closing_balance: client.balance,
+          statement
+        }
+      });
+
     } catch (error) {
       next(error);
     }
   }
 }
 
-module.exports = new ClientController();
+module.exports = new UpdatedClientController();

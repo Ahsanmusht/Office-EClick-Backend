@@ -1,39 +1,12 @@
-const express = require("express");
+// src/routes/sales.js - UPDATED
+const express = require('express');
 const router = express.Router();
-const SalesController = require("../controllers/SalesController");
-const auth = require("../middleware/auth");
-const { checkPermission } = require("../middleware/permissions");
+const UpdatedSalesController = require('../controllers/SalesController');
+const auth = require('../middleware/auth');
 
-router.get("/", auth, checkPermission("sales.view"), SalesController.getOrders);
-router.get(
-  "/:id",
-  auth,
-  checkPermission("sales.view"),
-  SalesController.getOrderById,
-);
-router.post(
-  "/",
-  auth,
-  checkPermission("sales.create"),
-  SalesController.createOrder,
-);
-router.put(
-  "/:id",
-  auth,
-  checkPermission("sales.create"),
-  SalesController.updateOrder,
-); // ✅ NEW
-router.post(
-  "/:id/confirm",
-  auth,
-  checkPermission("sales.confirm"),
-  SalesController.confirmOrder,
-);
-router.post(
-  "/:id/cancel",
-  auth,
-  checkPermission("sales.cancel"),
-  SalesController.cancelOrder,
-);
+router.get('/', UpdatedSalesController.getOrders);
+router.get('/report', UpdatedSalesController.getSalesReport);
+router.get('/:id', UpdatedSalesController.getOrderById);
+router.post('/', auth, UpdatedSalesController.createOrder);
 
 module.exports = router;

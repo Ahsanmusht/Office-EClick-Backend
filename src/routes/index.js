@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const authRoutes = require("./auth");
+const menuRoutes = require("./menu");
 const clientRoutes = require("./clients");
 const productRoutes = require("./products");
 const stockRoutes = require("./stock");
@@ -24,6 +25,7 @@ const periodClosingRoutes = require("./periodClosing");
 const usersRoutes = require("./users");
 
 router.use("/auth", authRoutes);
+router.use("/menu", menuRoutes);
 router.use("/clients", clientRoutes);
 router.use("/products", productRoutes);
 router.use("/stock", stockRoutes);

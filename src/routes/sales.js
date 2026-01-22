@@ -1,11 +1,12 @@
+// src/routes/sales.js - UPDATED
 const express = require('express');
 const router = express.Router();
-const SalesController = require('../controllers/SalesController');
+const UpdatedSalesController = require('../controllers/SalesController');
 const auth = require('../middleware/auth');
 
-router.get('/', SalesController.getOrders);
-router.get('/:id', SalesController.getOrderById);
-router.post('/', auth, SalesController.createOrder);
-router.post('/:id/confirm', auth, SalesController.confirmOrder);
+router.get('/', UpdatedSalesController.getOrders);
+router.get('/report', UpdatedSalesController.getSalesReport);
+router.get('/:id', UpdatedSalesController.getOrderById);
+router.post('/', auth, UpdatedSalesController.createOrder);
 
 module.exports = router;

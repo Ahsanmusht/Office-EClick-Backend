@@ -10,4 +10,6 @@ router.put('/profile', auth, AuthController.updateProfile);
 router.post('/change-password', auth, AuthController.changePassword);
 router.get('/users', auth, AuthController.getAllUsers);
 
+router.get('/my-permissions', auth, AuthController.getMyPermissions);
+
 module.exports = router;

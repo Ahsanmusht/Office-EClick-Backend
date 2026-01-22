@@ -1,14 +1,13 @@
+// src/routes/purchases.js - UPDATED
 const express = require('express');
 const router = express.Router();
-const PurchaseController = require('../controllers/PurchaseController');
+const UpdatedPurchaseController = require('../controllers/PurchaseController');
 const auth = require('../middleware/auth');
 
-router.get('/', PurchaseController.getOrders);
-router.get('/:id', PurchaseController.getOrderById);
-router.post('/', auth, PurchaseController.createOrder);
-router.put('/:id', auth, PurchaseController.updateOrder);
-router.post('/:id/confirm', auth, PurchaseController.confirmOrder);
-router.post('/:id/receive', auth, PurchaseController.receiveOrder);
-router.post('/:id/cancel', auth, PurchaseController.cancelOrder);
+router.get('/', UpdatedPurchaseController.getOrders);
+router.get('/wastage-report', UpdatedPurchaseController.getWastageReport);
+router.get('/wastage-details', UpdatedPurchaseController.getPurchaseWastageDetails);
+router.get('/:id', UpdatedPurchaseController.getOrderById);
+router.post('/', auth, UpdatedPurchaseController.createOrder);
 
 module.exports = router;

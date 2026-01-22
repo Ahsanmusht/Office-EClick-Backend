@@ -12,6 +12,10 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 0
 });
 
+async function getConnection() {
+  return await pool.getConnection();
+}
+
 async function testConnection() {
   try {
     const connection = await pool.getConnection();
@@ -59,5 +63,6 @@ module.exports = {
   pool,
   testConnection,
   executeQuery,
-  executeTransaction
+  executeTransaction,
+  getConnection
 };

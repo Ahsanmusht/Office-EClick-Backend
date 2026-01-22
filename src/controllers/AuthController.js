@@ -1,51 +1,51 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const BaseModel = require('../models/BaseModel');
-const config = require('../config/config');
-const { executeQuery } = require('../config/database');
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const BaseModel = require("../models/BaseModel");
+const config = require("../config/config");
+const { executeQuery } = require("../config/database");
 
-const User = new BaseModel('users');
+const User = new BaseModel("users");
 
 class AuthController {
-  
   async register(req, res, next) {
     try {
-      const { username, email, password, full_name, role, warehouse_id } = req.body;
-      
+      const { username, email, password, full_name, role, warehouse_id } =
+        req.body;
+
       // Check if user exists
       const existingUser = await executeQuery(
-        'SELECT id FROM users WHERE username = ? OR email = ?',
+        "SELECT id FROM users WHERE username = ? OR email = ?",
         [username, email]
       );
-      
+
       if (existingUser.length > 0) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Username or email already exists' 
+        return res.status(400).json({
+          success: false,
+          error: "Username or email already exists",
         });
       }
-      
+
       // Hash password
       const password_hash = await bcrypt.hash(password, 10);
-      
+
       // Create user
       const user = await User.create({
         username,
         email,
         password_hash,
         full_name,
-        role: role || 'staff',
+        role: role || "staff",
         warehouse_id,
-        is_active: 1
+        is_active: 1,
       });
-      
+
       // Generate token
       const token = jwt.sign(
         { id: user.id, username: user.username, role: user.role },
         config.jwt.secret,
         { expiresIn: config.jwt.expiresIn }
       );
-      
+
       res.status(201).json({
         success: true,
         data: {
@@ -54,12 +54,11 @@ class AuthController {
             username: user.username,
             email: user.email,
             full_name: user.full_name,
-            role: user.role
+            role: user.role,
           },
-          token
-        }
+          token,
+        },
       });
-      
     } catch (error) {
       next(error);
     }
@@ -68,45 +67,47 @@ class AuthController {
   async login(req, res, next) {
     try {
       const { username, password } = req.body;
-      
+
       // Find user
       const users = await executeQuery(
-        'SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1',
+        "SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1",
         [username, username]
       );
-      
+
       if (users.length === 0) {
-        return res.status(401).json({ 
-          success: false, 
-          error: 'Invalid credentials' 
+        return res.status(401).json({
+          success: false,
+          error: "Invalid credentials",
         });
       }
-      
+
       const user = users[0];
-      
+
       // Verify password
-      const isValidPassword = await bcrypt.compare(password, user.password_hash);
-      
+      const isValidPassword = await bcrypt.compare(
+        password,
+        user.password_hash
+      );
+
       if (!isValidPassword) {
-        return res.status(401).json({ 
-          success: false, 
-          error: 'Invalid credentials' 
+        return res.status(401).json({
+          success: false,
+          error: "Invalid credentials",
         });
       }
-      
+
       // Update last login
-      await executeQuery(
-        'UPDATE users SET last_login = NOW() WHERE id = ?',
-        [user.id]
-      );
-      
+      await executeQuery("UPDATE users SET last_login = NOW() WHERE id = ?", [
+        user.id,
+      ]);
+
       // Generate token
       const token = jwt.sign(
         { id: user.id, username: user.username, role: user.role },
         config.jwt.secret,
         { expiresIn: config.jwt.expiresIn }
       );
-      
+
       res.json({
         success: true,
         data: {
@@ -116,12 +117,11 @@ class AuthController {
             email: user.email,
             full_name: user.full_name,
             role: user.role,
-            warehouse_id: user.warehouse_id
+            warehouse_id: user.warehouse_id,
           },
-          token
-        }
+          token,
+        },
       });
-      
     } catch (error) {
       next(error);
     }
@@ -130,19 +130,18 @@ class AuthController {
   async getProfile(req, res, next) {
     try {
       const user = await User.findById(req.user.id);
-      
+
       if (!user) {
-        return res.status(404).json({ 
-          success: false, 
-          error: 'User not found' 
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
         });
       }
-      
+
       // Remove password
       delete user.password_hash;
-      
+
       res.json({ success: true, data: user });
-      
     } catch (error) {
       next(error);
     }
@@ -151,17 +150,16 @@ class AuthController {
   async updateProfile(req, res, next) {
     try {
       const { full_name, phone, email } = req.body;
-      
+
       const updates = {};
       if (full_name) updates.full_name = full_name;
       if (phone) updates.phone = phone;
       if (email) updates.email = email;
-      
+
       const user = await User.update(req.user.id, updates);
       delete user.password_hash;
-      
+
       res.json({ success: true, data: user });
-      
     } catch (error) {
       next(error);
     }
@@ -170,26 +168,25 @@ class AuthController {
   async changePassword(req, res, next) {
     try {
       const { old_password, new_password } = req.body;
-      
+
       const user = await User.findById(req.user.id);
-      
+
       // Verify old password
       const isValid = await bcrypt.compare(old_password, user.password_hash);
-      
+
       if (!isValid) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Current password is incorrect' 
+        return res.status(400).json({
+          success: false,
+          error: "Current password is incorrect",
         });
       }
-      
+
       // Hash new password
       const password_hash = await bcrypt.hash(new_password, 10);
-      
+
       await User.update(req.user.id, { password_hash });
-      
-      res.json({ success: true, message: 'Password updated successfully' });
-      
+
+      res.json({ success: true, message: "Password updated successfully" });
     } catch (error) {
       next(error);
     }
@@ -198,23 +195,63 @@ class AuthController {
   async getAllUsers(req, res, next) {
     try {
       const { limit = 20, offset = 0, role } = req.query;
-      
-      let where = 'is_active = 1';
+
+      let where = "is_active = 1";
       let params = [];
-      
+
       if (role) {
-        where += ' AND role = ?';
+        where += " AND role = ?";
         params.push(role);
       }
-      
+
       const users = await User.findAll({ limit, offset, where, params });
       const total = await User.count(where, params);
-      
+
       // Remove passwords
-      users.forEach(user => delete user.password_hash);
-      
+      users.forEach((user) => delete user.password_hash);
+
       res.json({ success: true, data: { users, total } });
-      
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getMyPermissions(req, res, next) {
+    try {
+      const userRole = req.user.role;
+
+      const sql = `
+      SELECT 
+        p.id,
+        p.code,
+        p.name,
+        p.module,
+        p.description
+      FROM role_permissions rp
+      JOIN permissions p ON rp.permission_id = p.id
+      WHERE rp.role = ?
+      ORDER BY p.module, p.name
+    `;
+
+      const permissions = await executeQuery(sql, [userRole]);
+
+      const groupedPermissions = {};
+      permissions.forEach((perm) => {
+        if (!groupedPermissions[perm.module]) {
+          groupedPermissions[perm.module] = [];
+        }
+        groupedPermissions[perm.module].push(perm);
+      });
+
+      res.json({
+        success: true,
+        data: {
+          role: userRole,
+          permissions: permissions,
+          grouped: groupedPermissions,
+          codes: permissions.map((p) => p.code),
+        },
+      });
     } catch (error) {
       next(error);
     }

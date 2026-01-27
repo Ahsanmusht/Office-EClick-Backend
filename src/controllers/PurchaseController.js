@@ -728,6 +728,292 @@ class UpdatedPurchaseController {
       next(error);
     }
   }
+
+  async processSingleProductProduction(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const { 
+        purchase_order_id,
+        purchase_order_item_id,  // ✅ NEW: Specific item ID
+        production_kg,
+        notes,
+        warehouse_id
+      } = req.body;
+
+      // VALIDATION
+      if (!purchase_order_id || !purchase_order_item_id || !production_kg) {
+        throw new Error("Purchase order ID, item ID, and production KG required");
+      }
+
+      // 1. Get Purchase Order
+      const [po] = await connection.query(
+        `SELECT * FROM purchase_orders WHERE id = ?`,
+        [purchase_order_id]
+      );
+
+      if (!po || po.length === 0) {
+        throw new Error("Purchase order not found");
+      }
+
+      // 2. Get Specific Item
+      const [item] = await connection.query(
+        `SELECT poi.*, p.name as product_name, p.sku
+         FROM purchase_order_items poi
+         JOIN products p ON poi.product_id = p.id
+         WHERE poi.id = ? AND poi.purchase_order_id = ?`,
+        [purchase_order_item_id, purchase_order_id]
+      );
+
+      if (!item || item.length === 0) {
+        throw new Error("Purchase order item not found");
+      }
+
+      const orderItem = item[0];
+
+      // 3. Check if already processed
+      if (orderItem.is_production_completed === 1) {
+        throw new Error(`Production already completed for ${orderItem.product_name}`);
+      }
+
+      // 4. Validate production quantity
+      const purchased_kg = parseFloat(orderItem.total_kg);
+      const prod_kg = parseFloat(production_kg);
+
+      if (prod_kg <= 0) {
+        throw new Error("Production KG must be greater than 0");
+      }
+
+      if (prod_kg > purchased_kg) {
+        throw new Error(
+          `Production KG (${prod_kg}) cannot exceed purchased KG (${purchased_kg})`
+        );
+      }
+
+      // 5. Calculate wastage
+      const wastage_kg = purchased_kg - prod_kg;
+      const wastage_percentage = (wastage_kg / purchased_kg) * 100;
+
+      // 6. Generate production number
+      const prodNumber = `PROD-${Date.now()}-${orderItem.product_id}`;
+
+      // 7. Insert production record
+      const [prodResult] = await connection.query(
+        `INSERT INTO production_records 
+        (production_number, purchase_order_id, purchase_order_item_id, 
+         product_id, warehouse_id, purchased_kg, production_kg, 
+         production_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE(), ?, ?)`,
+        [
+          prodNumber,
+          purchase_order_id,
+          purchase_order_item_id,
+          orderItem.product_id,
+          warehouse_id,
+          purchased_kg,
+          prod_kg,
+          notes || null,
+          req.user?.id
+        ]
+      );
+
+      const production_id = prodResult.insertId;
+
+      // 8. Add production stock
+      await connection.query(
+        `INSERT INTO stock (product_id, warehouse_id, quantity) 
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE quantity = quantity + ?`,
+        [orderItem.product_id, warehouse_id, prod_kg, prod_kg]
+      );
+
+      // 9. Stock movement entry
+      await connection.query(
+        `INSERT INTO stock_movements 
+        (product_id, warehouse_id, movement_type, quantity, 
+         reference_type, reference_id, notes, created_by)
+        VALUES (?, ?, 'production', ?, 'production_record', ?, ?, ?)`,
+        [
+          orderItem.product_id,
+          warehouse_id,
+          prod_kg,
+          production_id,
+          `Production: ${orderItem.product_name} - ${prod_kg}kg from PO ${po[0].po_number}`,
+          req.user?.id
+        ]
+      );
+
+      // 10. Create wastage record if exists
+      if (wastage_kg > 0) {
+        await connection.query(
+          `INSERT INTO wastage_records 
+          (product_id, warehouse_id, quantity, reason, description, 
+           wastage_date, production_record_id, status, reported_by, approved_by)
+          VALUES (?, ?, ?, 'production', ?, CURDATE(), ?, 'approved', ?, ?)`,
+          [
+            orderItem.product_id,
+            warehouse_id,
+            wastage_kg,
+            `Wastage: ${orderItem.product_name} - ${wastage_percentage.toFixed(2)}% from PO ${po[0].po_number}`,
+            production_id,
+            req.user?.id,
+            req.user?.id
+          ]
+        );
+      }
+
+      // 11. ✅ Mark THIS item as production completed
+      await connection.query(
+        `UPDATE purchase_order_items 
+         SET is_production_completed = 1
+         WHERE id = ?`,
+        [purchase_order_item_id]
+      );
+
+      // 12. ✅ Check if ALL items are completed
+      const [remainingItems] = await connection.query(
+        `SELECT COUNT(*) as pending_count
+         FROM purchase_order_items
+         WHERE purchase_order_id = ? AND is_production_completed = 0`,
+        [purchase_order_id]
+      );
+
+      // 13. ✅ If all items completed, mark PO as completed
+      if (remainingItems[0].pending_count === 0) {
+        await connection.query(
+          `UPDATE purchase_orders 
+           SET is_production_completed = 1,
+               production_date = CURDATE()
+           WHERE id = ?`,
+          [purchase_order_id]
+        );
+      }
+
+      await connection.commit();
+      connection.release();
+
+      res.json({
+        success: true,
+        message: `Production completed for ${orderItem.product_name}`,
+        data: {
+          production_number: prodNumber,
+          product_name: orderItem.product_name,
+          purchased_kg: purchased_kg.toFixed(3),
+          production_kg: prod_kg.toFixed(3),
+          wastage_kg: wastage_kg.toFixed(3),
+          wastage_percentage: wastage_percentage.toFixed(2) + '%',
+          all_items_completed: remainingItems[0].pending_count === 0
+        }
+      });
+
+    } catch (error) {
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+
+      console.error("Production processing error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to process production"
+      });
+    }
+  }
+
+  /**
+   * Get pending items for production
+   * Shows only incomplete items from a PO
+   */
+  async getPendingProductionItems(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+      const { purchase_order_id } = req.params;
+
+      const sql = `
+        SELECT 
+          poi.id as item_id,
+          poi.product_id,
+          poi.quantity,
+          poi.unit_type,
+          poi.bag_weight,
+          poi.total_kg as purchased_kg,
+          poi.is_production_completed,
+          p.name as product_name,
+          p.sku,
+          po.po_number,
+          po.order_date,
+          c.company_name as supplier_name
+        FROM purchase_order_items poi
+        JOIN products p ON poi.product_id = p.id
+        JOIN purchase_orders po ON poi.purchase_order_id = po.id
+        JOIN clients c ON po.supplier_id = c.id
+        WHERE poi.purchase_order_id = ?
+        ORDER BY poi.is_production_completed ASC, p.name ASC
+      `;
+
+      const items = await connection.query(sql, [purchase_order_id]);
+
+      const pending = items[0].filter(item => item.is_production_completed === 0);
+      const completed = items[0].filter(item => item.is_production_completed === 1);
+
+      res.json({
+        success: true,
+        data: {
+          purchase_order_id,
+          po_number: items[0][0]?.po_number,
+          supplier_name: items[0][0]?.supplier_name,
+          pending_items: pending,
+          completed_items: completed,
+          total_items: items[0].length,
+          pending_count: pending.length,
+          completed_count: completed.length
+        }
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+  /**
+   * Get production history for a purchase order
+   */
+  async getProductionHistoryByPO(req, res, next) {
+     let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+      const { purchase_order_id } = req.params;
+
+      const sql = `
+        SELECT 
+          pr.*,
+          p.name as product_name,
+          p.sku,
+          poi.unit_type,
+          poi.quantity as ordered_quantity,
+          poi.bag_weight
+        FROM production_records pr
+        JOIN products p ON pr.product_id = p.id
+        LEFT JOIN purchase_order_items poi ON pr.purchase_order_item_id = poi.id
+        WHERE pr.purchase_order_id = ?
+        ORDER BY pr.created_at DESC
+      `;
+
+      const records = await connection.query(sql, [purchase_order_id]);
+
+      res.json({
+        success: true,
+        data: records[0]
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new UpdatedPurchaseController();

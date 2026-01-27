@@ -15,5 +15,8 @@ router.get('/production/pending', UpdatedPurchaseController.getPendingProduction
 router.get('/production/:id/details', UpdatedPurchaseController.getPurchaseForProduction);
 router.post('/production/process', auth, UpdatedPurchaseController.processProduction);
 router.get('/production/history', UpdatedPurchaseController.getProductionHistory);
+router.post('/production/single', auth, UpdatedPurchaseController.processSingleProductProduction);
+router.get('/production/:purchase_order_id/items', UpdatedPurchaseController.getPendingProductionItems);
+router.get('/production/:purchase_order_id/history', UpdatedPurchaseController.getProductionHistoryByPO);
 
 module.exports = router;

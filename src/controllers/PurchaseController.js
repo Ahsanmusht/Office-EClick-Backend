@@ -143,12 +143,6 @@ class UpdatedPurchaseController {
         );
       }
 
-      // UPDATE SUPPLIER BALANCE
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [total_amount, supplier_id]
-      );
-
       // PAYMENT HANDLING
       if (make_payment) {
         const pcNumber = `PC-${Date.now()}`;
@@ -166,11 +160,6 @@ class UpdatedPurchaseController {
             `Payment for ${poNumber}`,
             req.user?.id
           ]
-        );
-
-        await connection.query(
-          'UPDATE clients SET balance = balance - ? WHERE id = ?',
-          [total_amount, supplier_id]
         );
       }
 

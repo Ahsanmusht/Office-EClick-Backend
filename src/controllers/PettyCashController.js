@@ -1,4 +1,6 @@
-// src/controllers/PettyCashController.js - COMPLETE WITH CRUD
+// src/controllers/PettyCashController.js - NO MANUAL BALANCE UPDATE
+// Trigger handles all balance updates automatically
+
 const BaseModel = require("../models/BaseModel");
 const { executeQuery, executeTransaction, getConnection } = require("../config/database");
 
@@ -16,8 +18,8 @@ class PettyCashController {
       const { 
         client_id, 
         amount, 
-        transaction_type, // cash_in or cash_out
-        reference_type,   // sales_order, purchase_order, manual
+        transaction_type,
+        reference_type,
         reference_id,
         description,
         transaction_date 
@@ -32,12 +34,18 @@ class PettyCashController {
         throw new Error('Transaction type must be cash_in or cash_out');
       }
 
+      const parsedAmount = parseFloat(amount);
+      
+      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        throw new Error('Invalid amount');
+      }
+
       // Generate transaction number
       const transactionNumber = `PC-${Date.now()}`;
 
       // Get client details
       const [client] = await connection.query(
-        'SELECT * FROM clients WHERE id = ?',
+        'SELECT id, client_type, balance, company_name FROM clients WHERE id = ?',
         [client_id]
       );
 
@@ -45,7 +53,14 @@ class PettyCashController {
         throw new Error('Client not found');
       }
 
-      // Create petty cash entry
+      console.log('=== PETTY CASH CREATE ===');
+      console.log('Client:', client[0].company_name);
+      console.log('Old Balance:', parseFloat(client[0].balance));
+      console.log('Amount:', parsedAmount);
+      console.log('Transaction Type:', transaction_type);
+      console.log('Note: Trigger will handle balance update');
+
+      // Create petty cash entry - TRIGGER will update balance
       const [pettyCashResult] = await connection.query(
         `INSERT INTO petty_cash 
         (transaction_number, transaction_date, transaction_type, client_id, 
@@ -56,7 +71,7 @@ class PettyCashController {
           transaction_date || new Date().toISOString().split('T')[0],
           transaction_type,
           client_id,
-          amount,
+          parsedAmount,
           reference_type || 'manual',
           reference_id || null,
           description || '',
@@ -66,26 +81,9 @@ class PettyCashController {
 
       const pettyCashId = pettyCashResult.insertId;
 
-      // Update client balance based on transaction type and client type
-      const clientType = client[0].client_type;
-      let balanceChange = 0;
-
-      if (clientType === 'customer') {
-        // Customer: cash_in reduces balance, cash_out increases balance
-        balanceChange = transaction_type === 'cash_in' ? -amount : amount;
-      } else if (clientType === 'supplier') {
-        // Supplier: cash_out reduces balance, cash_in increases balance  
-        balanceChange = transaction_type === 'cash_out' ? -amount : amount;
-      }
-
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [balanceChange, client_id]
-      );
-
       await connection.commit();
 
-      // Get the complete record
+      // Get the complete record with updated balance
       const [newRecord] = await connection.query(
         `SELECT pc.*, c.company_name, c.client_type, c.balance as client_balance
          FROM petty_cash pc
@@ -93,6 +91,9 @@ class PettyCashController {
          WHERE pc.id = ?`,
         [pettyCashId]
       );
+
+      console.log('New Balance:', parseFloat(newRecord[0].client_balance));
+      console.log('========================');
 
       connection.release();
 
@@ -143,60 +144,23 @@ class PettyCashController {
 
       const oldRecord = existing[0];
 
-      // Get old client
-      const [oldClient] = await connection.query(
-        'SELECT * FROM clients WHERE id = ?',
-        [oldRecord.client_id]
-      );
+      console.log('=== PETTY CASH UPDATE ===');
+      console.log('Old Record:', oldRecord);
+      console.log('Note: Trigger will handle balance update');
 
-      // Reverse old balance change
-      let oldBalanceChange = 0;
-      if (oldClient[0].client_type === 'customer') {
-        oldBalanceChange = oldRecord.transaction_type === 'cash_in' ? oldRecord.amount : -oldRecord.amount;
-      } else if (oldClient[0].client_type === 'supplier') {
-        oldBalanceChange = oldRecord.transaction_type === 'cash_out' ? oldRecord.amount : -oldRecord.amount;
-      }
+      // Update petty cash record - TRIGGER will handle balance
+      const newClientId = client_id || oldRecord.client_id;
+      const newAmount = amount !== undefined ? parseFloat(amount) : parseFloat(oldRecord.amount);
+      const newType = transaction_type || oldRecord.transaction_type;
+      const newDescription = description !== undefined ? description : oldRecord.description;
+      const newTransactionDate = transaction_date || oldRecord.transaction_date;
 
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [oldBalanceChange, oldRecord.client_id]
-      );
-
-      // Update petty cash record
       await connection.query(
         `UPDATE petty_cash 
          SET client_id = ?, amount = ?, transaction_type = ?, 
              description = ?, transaction_date = ?
          WHERE id = ?`,
-        [
-          client_id || oldRecord.client_id,
-          amount || oldRecord.amount,
-          transaction_type || oldRecord.transaction_type,
-          description || oldRecord.description,
-          transaction_date || oldRecord.transaction_date,
-          id
-        ]
-      );
-
-      // Apply new balance change
-      const [newClient] = await connection.query(
-        'SELECT * FROM clients WHERE id = ?',
-        [client_id || oldRecord.client_id]
-      );
-
-      let newBalanceChange = 0;
-      const newAmount = amount || oldRecord.amount;
-      const newType = transaction_type || oldRecord.transaction_type;
-
-      if (newClient[0].client_type === 'customer') {
-        newBalanceChange = newType === 'cash_in' ? -newAmount : newAmount;
-      } else if (newClient[0].client_type === 'supplier') {
-        newBalanceChange = newType === 'cash_out' ? -newAmount : newAmount;
-      }
-
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [newBalanceChange, client_id || oldRecord.client_id]
+        [newClientId, newAmount, newType, newDescription, newTransactionDate, id]
       );
 
       await connection.commit();
@@ -209,6 +173,9 @@ class PettyCashController {
          WHERE pc.id = ?`,
         [id]
       );
+
+      console.log('Updated Balance:', parseFloat(updatedRecord[0].client_balance));
+      console.log('========================');
 
       connection.release();
 
@@ -252,26 +219,11 @@ class PettyCashController {
 
       const record = existing[0];
 
-      // Get client
-      const [client] = await connection.query(
-        'SELECT * FROM clients WHERE id = ?',
-        [record.client_id]
-      );
+      console.log('=== PETTY CASH DELETE ===');
+      console.log('Deleting Record:', record);
+      console.log('Note: Trigger will handle balance reversal');
 
-      // Reverse balance change
-      let balanceChange = 0;
-      if (client[0].client_type === 'customer') {
-        balanceChange = record.transaction_type === 'cash_in' ? record.amount : -record.amount;
-      } else if (client[0].client_type === 'supplier') {
-        balanceChange = record.transaction_type === 'cash_out' ? record.amount : -record.amount;
-      }
-
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [balanceChange, record.client_id]
-      );
-
-      // Delete the record
+      // Delete the record - TRIGGER will reverse balance
       await connection.query(
         'DELETE FROM petty_cash WHERE id = ?',
         [id]
@@ -279,6 +231,9 @@ class PettyCashController {
 
       await connection.commit();
       connection.release();
+
+      console.log('Transaction deleted successfully');
+      console.log('========================');
 
       res.json({
         success: true,

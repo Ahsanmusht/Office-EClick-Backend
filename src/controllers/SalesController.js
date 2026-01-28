@@ -177,12 +177,6 @@ class UpdatedSalesController {
         );
       }
 
-      // UPDATE CUSTOMER BALANCE
-      await connection.query(
-        "UPDATE clients SET balance = balance + ? WHERE id = ?",
-        [total_amount, customer_id],
-      );
-
       // PAYMENT HANDLING
       if (make_payment) {
         const pcNumber = `PC-${Date.now()}`;
@@ -200,12 +194,6 @@ class UpdatedSalesController {
             `Payment for ${orderNumber}`,
             req.user?.id,
           ],
-        );
-
-        // Deduct from balance
-        await connection.query(
-          "UPDATE clients SET balance = balance - ? WHERE id = ?",
-          [total_amount, customer_id],
         );
       }
 

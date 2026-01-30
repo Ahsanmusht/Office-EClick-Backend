@@ -7,7 +7,7 @@ const PurchaseOrder = new BaseModel("purchase_orders");
 
 async function getNextPONumber() {
   const [lastOrder] = await executeQuery(
-    "SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1"
+    "SELECT po_number FROM purchase_orders ORDER BY id DESC LIMIT 1",
   );
 
   let nextNumber = "PO001";
@@ -19,7 +19,6 @@ async function getNextPONumber() {
 }
 
 class UpdatedPurchaseController {
-  
   // ============================================
   // CREATE PURCHASE ORDER - NO CHANGES NEEDED
   // ============================================
@@ -43,15 +42,23 @@ class UpdatedPurchaseController {
       // VALIDATION
       if (!supplier_id) throw new Error("Supplier ID is required");
       if (!warehouse_id) throw new Error("Warehouse ID is required");
-      if (!items || items.length === 0) throw new Error("At least one item is required");
+      if (!items || items.length === 0)
+        throw new Error("At least one item is required");
       if (!order_date) throw new Error("Order date is required");
 
       items.forEach((item, index) => {
-        if (!item.product_id) throw new Error(`Product ID required for item ${index + 1}`);
-        if (!item.unit_type) throw new Error(`Unit type required for item ${index + 1}`);
-        if (!item.quantity || item.quantity <= 0) throw new Error(`Valid quantity required for item ${index + 1}`);
-        if (!item.unit_price || item.unit_price <= 0) throw new Error(`Valid unit price required for item ${index + 1}`);
-        if (item.unit_type === 'bag' && (!item.bag_weight || item.bag_weight <= 0)) {
+        if (!item.product_id)
+          throw new Error(`Product ID required for item ${index + 1}`);
+        if (!item.unit_type)
+          throw new Error(`Unit type required for item ${index + 1}`);
+        if (!item.quantity || item.quantity <= 0)
+          throw new Error(`Valid quantity required for item ${index + 1}`);
+        if (!item.unit_price || item.unit_price <= 0)
+          throw new Error(`Valid unit price required for item ${index + 1}`);
+        if (
+          item.unit_type === "bag" &&
+          (!item.bag_weight || item.bag_weight <= 0)
+        ) {
           throw new Error(`Bag weight required for item ${index + 1}`);
         }
       });
@@ -71,7 +78,7 @@ class UpdatedPurchaseController {
         const discountRate = parseFloat(item.discount_rate || 0);
 
         let item_total_kg = 0;
-        if (item.unit_type === 'bag') {
+        if (item.unit_type === "bag") {
           item_total_kg = qty * parseFloat(item.bag_weight);
         } else {
           item_total_kg = qty;
@@ -92,7 +99,7 @@ class UpdatedPurchaseController {
           item_total_kg,
           itemSubtotal,
           itemDiscount,
-          itemTax
+          itemTax,
         };
       });
 
@@ -117,8 +124,8 @@ class UpdatedPurchaseController {
           total_discount,
           total_amount,
           notes || null,
-          req.user?.id
-        ]
+          req.user?.id,
+        ],
       );
 
       const orderId = orderResult.insertId;
@@ -134,43 +141,45 @@ class UpdatedPurchaseController {
             orderId,
             item.product_id,
             item.unit_type,
-            item.unit_type === 'bag' ? item.bag_weight : null,
+            item.unit_type === "bag" ? item.bag_weight : null,
             item.quantity,
             item.unit_price,
             item.tax_rate || 0,
-            item.discount_rate || 0
-          ]
+            item.discount_rate || 0,
+          ],
         );
       }
 
-      // UPDATE SUPPLIER BALANCE
-      await connection.query(
-        'UPDATE clients SET balance = balance + ? WHERE id = ?',
-        [total_amount, supplier_id]
-      );
-
       // PAYMENT HANDLING
       if (make_payment) {
+        const {
+          payment_method = "cash",
+          bank_account_id = null,
+          cheque_number = null,
+          cheque_date = null,
+        } = req.body;
+
         const pcNumber = `PC-${Date.now()}`;
+
         await connection.query(
           `INSERT INTO petty_cash 
-          (transaction_number, transaction_date, transaction_type, client_id, 
-           amount, reference_type, reference_id, description, created_by)
-          VALUES (?, ?, 'cash_out', ?, ?, 'purchase_order', ?, ?, ?)`,
+    (transaction_number, transaction_date, transaction_type, payment_method,
+     bank_account_id, cheque_number, cheque_date, payment_status,
+     client_id, amount, reference_type, reference_id, description, created_by)
+    VALUES (?, ?, 'cash_out', ?, ?, ?, ?, 'cleared', ?, ?, 'purchase_order', ?, ?, ?)`,
           [
             pcNumber,
-            payment_date || new Date().toISOString().split('T')[0],
+            payment_date || new Date().toISOString().split("T")[0],
+            payment_method,
+            bank_account_id,
+            cheque_number,
+            cheque_date,
             supplier_id,
             total_amount,
             orderId,
             `Payment for ${poNumber}`,
-            req.user?.id
-          ]
-        );
-
-        await connection.query(
-          'UPDATE clients SET balance = balance - ? WHERE id = ?',
-          [total_amount, supplier_id]
+            req.user?.id,
+          ],
         );
       }
 
@@ -178,7 +187,7 @@ class UpdatedPurchaseController {
 
       const [order] = await connection.query(
         "SELECT * FROM purchase_orders WHERE id = ?",
-        [orderId]
+        [orderId],
       );
 
       connection.release();
@@ -190,10 +199,9 @@ class UpdatedPurchaseController {
           order: order[0],
           total_kg: total_kg.toFixed(3),
           payment_made: make_payment,
-          production_status: 'pending'
-        }
+          production_status: "pending",
+        },
       });
-
     } catch (error) {
       if (connection) {
         await connection.rollback();
@@ -202,7 +210,7 @@ class UpdatedPurchaseController {
       console.error("Purchase order creation error:", error);
       res.status(500).json({
         success: false,
-        error: error.message || "Failed to create purchase order"
+        error: error.message || "Failed to create purchase order",
       });
     }
   }
@@ -240,11 +248,10 @@ class UpdatedPurchaseController {
 
       const orders = await executeQuery(sql);
 
-      res.json({ 
-        success: true, 
-        data: orders 
+      res.json({
+        success: true,
+        data: orders,
       });
-
     } catch (error) {
       next(error);
     }
@@ -273,7 +280,7 @@ class UpdatedPurchaseController {
       if (!order) {
         return res.status(404).json({
           success: false,
-          error: "Purchase order not found or already processed"
+          error: "Purchase order not found or already processed",
         });
       }
 
@@ -292,8 +299,9 @@ class UpdatedPurchaseController {
       const items = await executeQuery(itemsSql, [id]);
 
       // Calculate total purchased KG
-      const total_purchased_kg = items.reduce((sum, item) => 
-        sum + parseFloat(item.total_kg), 0
+      const total_purchased_kg = items.reduce(
+        (sum, item) => sum + parseFloat(item.total_kg),
+        0,
       );
 
       res.json({
@@ -302,10 +310,9 @@ class UpdatedPurchaseController {
           ...order,
           items,
           total_purchased_kg: total_purchased_kg.toFixed(3),
-          total_items: items.length
-        }
+          total_items: items.length,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -331,7 +338,7 @@ class UpdatedPurchaseController {
       // Get purchase order
       const [po] = await connection.query(
         `SELECT * FROM purchase_orders WHERE id = ? AND is_production_completed = 0`,
-        [purchase_order_id]
+        [purchase_order_id],
       );
 
       if (!po) {
@@ -344,7 +351,7 @@ class UpdatedPurchaseController {
          FROM purchase_order_items poi
          JOIN products p ON poi.product_id = p.id
          WHERE poi.purchase_order_id = ?`,
-        [purchase_order_id]
+        [purchase_order_id],
       );
 
       const items = poItems[0];
@@ -352,9 +359,9 @@ class UpdatedPurchaseController {
       // Validate all products have production entry
       for (const item of items) {
         const prodItem = production_items.find(
-          pi => pi.product_id == item.product_id
+          (pi) => pi.product_id == item.product_id,
         );
-        
+
         if (!prodItem) {
           throw new Error(`Production entry missing for ${item.product_name}`);
         }
@@ -368,7 +375,7 @@ class UpdatedPurchaseController {
 
         if (production_kg > purchased_kg) {
           throw new Error(
-            `Production KG (${production_kg}) cannot exceed purchased KG (${purchased_kg}) for ${item.product_name}`
+            `Production KG (${production_kg}) cannot exceed purchased KG (${purchased_kg}) for ${item.product_name}`,
           );
         }
       }
@@ -381,7 +388,7 @@ class UpdatedPurchaseController {
 
       for (const item of items) {
         const prodItem = production_items.find(
-          pi => pi.product_id == item.product_id
+          (pi) => pi.product_id == item.product_id,
         );
 
         const purchased_kg = parseFloat(item.total_kg);
@@ -410,8 +417,8 @@ class UpdatedPurchaseController {
             purchased_kg,
             production_kg,
             prodItem.notes || notes || null,
-            req.user?.id
-          ]
+            req.user?.id,
+          ],
         );
 
         const production_id = prodResult.insertId;
@@ -421,7 +428,7 @@ class UpdatedPurchaseController {
           `INSERT INTO stock (product_id, warehouse_id, quantity) 
            VALUES (?, ?, ?)
            ON DUPLICATE KEY UPDATE quantity = quantity + ?`,
-          [item.product_id, wh_id, production_kg, production_kg]
+          [item.product_id, wh_id, production_kg, production_kg],
         );
 
         // Stock movement entry
@@ -436,8 +443,8 @@ class UpdatedPurchaseController {
             production_kg,
             production_id,
             `Production from ${po.po_number} - ${item.product_name}: Purchased ${purchased_kg}kg, Production ${production_kg}kg, Wastage ${wastage_kg.toFixed(3)}kg`,
-            req.user?.id
-          ]
+            req.user?.id,
+          ],
         );
 
         // Create wastage record if wastage exists
@@ -454,8 +461,8 @@ class UpdatedPurchaseController {
               `Production wastage: ${item.product_name} from ${po.po_number} (${wastage_percentage.toFixed(2)}%)`,
               production_id,
               req.user?.id,
-              req.user?.id
-            ]
+              req.user?.id,
+            ],
           );
         }
 
@@ -466,7 +473,7 @@ class UpdatedPurchaseController {
           purchased_kg: purchased_kg.toFixed(3),
           production_kg: production_kg.toFixed(3),
           wastage_kg: wastage_kg.toFixed(3),
-          wastage_percentage: wastage_percentage.toFixed(2) + '%'
+          wastage_percentage: wastage_percentage.toFixed(2) + "%",
         });
       }
 
@@ -480,11 +487,11 @@ class UpdatedPurchaseController {
              wastage_percentage = ?
          WHERE id = ?`,
         [
-          total_production, 
-          total_wastage, 
+          total_production,
+          total_wastage,
           (total_wastage / total_purchased) * 100,
-          purchase_order_id
-        ]
+          purchase_order_id,
+        ],
       );
 
       await connection.commit();
@@ -499,11 +506,11 @@ class UpdatedPurchaseController {
           total_purchased_kg: total_purchased.toFixed(3),
           total_production_kg: total_production.toFixed(3),
           total_wastage_kg: total_wastage.toFixed(3),
-          total_wastage_percentage: ((total_wastage / total_purchased) * 100).toFixed(2) + '%',
-          products: productionResults
-        }
+          total_wastage_percentage:
+            ((total_wastage / total_purchased) * 100).toFixed(2) + "%",
+          products: productionResults,
+        },
       });
-
     } catch (error) {
       if (connection) {
         await connection.rollback();
@@ -513,7 +520,7 @@ class UpdatedPurchaseController {
       console.error("Production processing error:", error);
       res.status(500).json({
         success: false,
-        error: error.message || "Failed to process production"
+        error: error.message || "Failed to process production",
       });
     }
   }
@@ -525,21 +532,21 @@ class UpdatedPurchaseController {
     try {
       const { start_date, end_date, product_id, purchase_order_id } = req.query;
 
-      let where = '1=1';
+      let where = "1=1";
       let params = [];
 
       if (start_date && end_date) {
-        where += ' AND pr.production_date BETWEEN ? AND ?';
+        where += " AND pr.production_date BETWEEN ? AND ?";
         params.push(start_date, end_date);
       }
 
       if (product_id) {
-        where += ' AND pr.product_id = ?';
+        where += " AND pr.product_id = ?";
         params.push(product_id);
       }
 
       if (purchase_order_id) {
-        where += ' AND pr.purchase_order_id = ?';
+        where += " AND pr.purchase_order_id = ?";
         params.push(purchase_order_id);
       }
 
@@ -565,22 +572,36 @@ class UpdatedPurchaseController {
       // Summary
       const summary = {
         total_records: records.length,
-        total_purchased: records.reduce((sum, r) => sum + parseFloat(r.purchased_kg), 0),
-        total_production: records.reduce((sum, r) => sum + parseFloat(r.production_kg), 0),
-        total_wastage: records.reduce((sum, r) => sum + parseFloat(r.wastage_kg), 0),
-        avg_wastage_percentage: records.length > 0 
-          ? (records.reduce((sum, r) => sum + parseFloat(r.wastage_percentage), 0) / records.length).toFixed(2)
-          : 0
+        total_purchased: records.reduce(
+          (sum, r) => sum + parseFloat(r.purchased_kg),
+          0,
+        ),
+        total_production: records.reduce(
+          (sum, r) => sum + parseFloat(r.production_kg),
+          0,
+        ),
+        total_wastage: records.reduce(
+          (sum, r) => sum + parseFloat(r.wastage_kg),
+          0,
+        ),
+        avg_wastage_percentage:
+          records.length > 0
+            ? (
+                records.reduce(
+                  (sum, r) => sum + parseFloat(r.wastage_percentage),
+                  0,
+                ) / records.length
+              ).toFixed(2)
+            : 0,
       };
 
-      res.json({ 
-        success: true, 
-        data: { 
+      res.json({
+        success: true,
+        data: {
           records,
-          summary
-        } 
+          summary,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -591,14 +612,14 @@ class UpdatedPurchaseController {
   // ============================================
   async getOrders(req, res, next) {
     try {
-      const { 
-        limit = 20, 
-        offset = 0, 
-        status, 
+      const {
+        limit = 20,
+        offset = 0,
+        status,
         supplier_id,
         start_date,
         end_date,
-        production_status
+        production_status,
       } = req.query;
 
       let where = "1=1";
@@ -619,9 +640,9 @@ class UpdatedPurchaseController {
         params.push(start_date, end_date);
       }
 
-      if (production_status === 'pending') {
+      if (production_status === "pending") {
         where += " AND po.is_production_completed = 0";
-      } else if (production_status === 'completed') {
+      } else if (production_status === "completed") {
         where += " AND po.is_production_completed = 1";
       }
 
@@ -646,7 +667,11 @@ class UpdatedPurchaseController {
         LIMIT ? OFFSET ?
       `;
 
-      const orders = await executeQuery(sql, [...params, parseInt(limit), parseInt(offset)]);
+      const orders = await executeQuery(sql, [
+        ...params,
+        parseInt(limit),
+        parseInt(offset),
+      ]);
 
       const totalSql = `
         SELECT COUNT(*) as total
@@ -717,11 +742,11 @@ class UpdatedPurchaseController {
 
       res.json({
         success: true,
-        data: { 
-          ...order, 
+        data: {
+          ...order,
           items,
           production_records: production_records || [],
-          payment_info: payment || null
+          payment_info: payment || null,
         },
       });
     } catch (error) {
@@ -735,23 +760,25 @@ class UpdatedPurchaseController {
       connection = await getConnection();
       await connection.beginTransaction();
 
-      const { 
+      const {
         purchase_order_id,
-        purchase_order_item_id,  // ✅ NEW: Specific item ID
+        purchase_order_item_id, // ✅ NEW: Specific item ID
         production_kg,
         notes,
-        warehouse_id
+        warehouse_id,
       } = req.body;
 
       // VALIDATION
       if (!purchase_order_id || !purchase_order_item_id || !production_kg) {
-        throw new Error("Purchase order ID, item ID, and production KG required");
+        throw new Error(
+          "Purchase order ID, item ID, and production KG required",
+        );
       }
 
       // 1. Get Purchase Order
       const [po] = await connection.query(
         `SELECT * FROM purchase_orders WHERE id = ?`,
-        [purchase_order_id]
+        [purchase_order_id],
       );
 
       if (!po || po.length === 0) {
@@ -764,7 +791,7 @@ class UpdatedPurchaseController {
          FROM purchase_order_items poi
          JOIN products p ON poi.product_id = p.id
          WHERE poi.id = ? AND poi.purchase_order_id = ?`,
-        [purchase_order_item_id, purchase_order_id]
+        [purchase_order_item_id, purchase_order_id],
       );
 
       if (!item || item.length === 0) {
@@ -775,7 +802,9 @@ class UpdatedPurchaseController {
 
       // 3. Check if already processed
       if (orderItem.is_production_completed === 1) {
-        throw new Error(`Production already completed for ${orderItem.product_name}`);
+        throw new Error(
+          `Production already completed for ${orderItem.product_name}`,
+        );
       }
 
       // 4. Validate production quantity
@@ -788,7 +817,7 @@ class UpdatedPurchaseController {
 
       if (prod_kg > purchased_kg) {
         throw new Error(
-          `Production KG (${prod_kg}) cannot exceed purchased KG (${purchased_kg})`
+          `Production KG (${prod_kg}) cannot exceed purchased KG (${purchased_kg})`,
         );
       }
 
@@ -815,8 +844,8 @@ class UpdatedPurchaseController {
           purchased_kg,
           prod_kg,
           notes || null,
-          req.user?.id
-        ]
+          req.user?.id,
+        ],
       );
 
       const production_id = prodResult.insertId;
@@ -826,7 +855,7 @@ class UpdatedPurchaseController {
         `INSERT INTO stock (product_id, warehouse_id, quantity) 
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE quantity = quantity + ?`,
-        [orderItem.product_id, warehouse_id, prod_kg, prod_kg]
+        [orderItem.product_id, warehouse_id, prod_kg, prod_kg],
       );
 
       // 9. Stock movement entry
@@ -841,8 +870,8 @@ class UpdatedPurchaseController {
           prod_kg,
           production_id,
           `Production: ${orderItem.product_name} - ${prod_kg}kg from PO ${po[0].po_number}`,
-          req.user?.id
-        ]
+          req.user?.id,
+        ],
       );
 
       // 10. Create wastage record if exists
@@ -859,8 +888,8 @@ class UpdatedPurchaseController {
             `Wastage: ${orderItem.product_name} - ${wastage_percentage.toFixed(2)}% from PO ${po[0].po_number}`,
             production_id,
             req.user?.id,
-            req.user?.id
-          ]
+            req.user?.id,
+          ],
         );
       }
 
@@ -869,7 +898,7 @@ class UpdatedPurchaseController {
         `UPDATE purchase_order_items 
          SET is_production_completed = 1
          WHERE id = ?`,
-        [purchase_order_item_id]
+        [purchase_order_item_id],
       );
 
       // 12. ✅ Check if ALL items are completed
@@ -877,7 +906,7 @@ class UpdatedPurchaseController {
         `SELECT COUNT(*) as pending_count
          FROM purchase_order_items
          WHERE purchase_order_id = ? AND is_production_completed = 0`,
-        [purchase_order_id]
+        [purchase_order_id],
       );
 
       // 13. ✅ If all items completed, mark PO as completed
@@ -887,7 +916,7 @@ class UpdatedPurchaseController {
            SET is_production_completed = 1,
                production_date = CURDATE()
            WHERE id = ?`,
-          [purchase_order_id]
+          [purchase_order_id],
         );
       }
 
@@ -903,11 +932,10 @@ class UpdatedPurchaseController {
           purchased_kg: purchased_kg.toFixed(3),
           production_kg: prod_kg.toFixed(3),
           wastage_kg: wastage_kg.toFixed(3),
-          wastage_percentage: wastage_percentage.toFixed(2) + '%',
-          all_items_completed: remainingItems[0].pending_count === 0
-        }
+          wastage_percentage: wastage_percentage.toFixed(2) + "%",
+          all_items_completed: remainingItems[0].pending_count === 0,
+        },
       });
-
     } catch (error) {
       if (connection) {
         await connection.rollback();
@@ -917,7 +945,7 @@ class UpdatedPurchaseController {
       console.error("Production processing error:", error);
       res.status(500).json({
         success: false,
-        error: error.message || "Failed to process production"
+        error: error.message || "Failed to process production",
       });
     }
   }
@@ -957,8 +985,12 @@ class UpdatedPurchaseController {
 
       const items = await connection.query(sql, [purchase_order_id]);
 
-      const pending = items[0].filter(item => item.is_production_completed === 0);
-      const completed = items[0].filter(item => item.is_production_completed === 1);
+      const pending = items[0].filter(
+        (item) => item.is_production_completed === 0,
+      );
+      const completed = items[0].filter(
+        (item) => item.is_production_completed === 1,
+      );
 
       res.json({
         success: true,
@@ -970,10 +1002,9 @@ class UpdatedPurchaseController {
           completed_items: completed,
           total_items: items[0].length,
           pending_count: pending.length,
-          completed_count: completed.length
-        }
+          completed_count: completed.length,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -982,7 +1013,7 @@ class UpdatedPurchaseController {
    * Get production history for a purchase order
    */
   async getProductionHistoryByPO(req, res, next) {
-     let connection;
+    let connection;
     try {
       connection = await getConnection();
       await connection.beginTransaction();
@@ -1007,9 +1038,8 @@ class UpdatedPurchaseController {
 
       res.json({
         success: true,
-        data: records[0]
+        data: records[0],
       });
-
     } catch (error) {
       next(error);
     }

@@ -1,7 +1,11 @@
 // src/controllers/UpdatedSalesController.js
 const BaseModel = require("../models/BaseModel");
 const Stock = require("../models/Stock");
-const { executeTransaction, executeQuery, getConnection } = require("../config/database");
+const {
+  executeTransaction,
+  executeQuery,
+  getConnection,
+} = require("../config/database");
 
 const SalesOrder = new BaseModel("sales_orders");
 const PettyCash = new BaseModel("petty_cash");
@@ -177,35 +181,36 @@ class UpdatedSalesController {
         );
       }
 
-      // UPDATE CUSTOMER BALANCE
-      await connection.query(
-        "UPDATE clients SET balance = balance + ? WHERE id = ?",
-        [total_amount, customer_id],
-      );
-
       // PAYMENT HANDLING
       if (make_payment) {
+        const {
+          payment_method = "cash",
+          bank_account_id = null,
+          cheque_number = null,
+          cheque_date = null,
+        } = req.body;
+
         const pcNumber = `PC-${Date.now()}`;
+
         await connection.query(
           `INSERT INTO petty_cash 
-          (transaction_number, transaction_date, transaction_type, client_id, 
-           amount, reference_type, reference_id, description, created_by)
-          VALUES (?, ?, 'cash_in', ?, ?, 'sales_order', ?, ?, ?)`,
+    (transaction_number, transaction_date, transaction_type, payment_method,
+     bank_account_id, cheque_number, cheque_date, payment_status,
+     client_id, amount, reference_type, reference_id, description, created_by)
+    VALUES (?, ?, 'cash_in', ?, ?, ?, ?, 'cleared', ?, ?, 'sales_order', ?, ?, ?)`,
           [
             pcNumber,
             payment_date || new Date(),
+            payment_method,
+            bank_account_id,
+            cheque_number,
+            cheque_date,
             customer_id,
             total_amount,
             orderId,
             `Payment for ${orderNumber}`,
             req.user?.id,
           ],
-        );
-
-        // Deduct from balance
-        await connection.query(
-          "UPDATE clients SET balance = balance - ? WHERE id = ?",
-          [total_amount, customer_id],
         );
       }
 

@@ -23,6 +23,9 @@ const salaryRoutes = require("./salary");
 const notificationRoutes = require("./notifications");
 const periodClosingRoutes = require("./periodClosing");
 const usersRoutes = require("./users");
+const pettyCashRoutes = require('./pettyCash');
+const wastageReportRoutes = require('./wastageReport');
+const BankRoutes = require('./bank');
 
 router.use("/auth", authRoutes);
 router.use("/menu", menuRoutes);
@@ -46,5 +49,8 @@ router.use("/salary", salaryRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/period-closing", periodClosingRoutes);
 router.use("/users", usersRoutes);
+router.use('/petty-cash', pettyCashRoutes);
+router.use('/wastage-report', wastageReportRoutes);
+router.use('/bank', BankRoutes);
 
 module.exports = router;

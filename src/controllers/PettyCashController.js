@@ -1,100 +1,341 @@
-// src/controllers/PettyCashController.js
+// src/controllers/PettyCashController.js - NO MANUAL BALANCE UPDATE
+// Trigger handles all balance updates automatically
+
 const BaseModel = require("../models/BaseModel");
-const { executeQuery, executeTransaction } = require("../config/database");
+const {
+  executeQuery,
+  executeTransaction,
+  getConnection,
+} = require("../config/database");
 
 const PettyCash = new BaseModel("petty_cash");
 
 class PettyCashController {
-  
-  // Create Petty Cash Entry
+  // ==================== CREATE ====================
   async create(req, res, next) {
+    let connection;
     try {
-      const { 
-        client_id, 
-        amount, 
-        transaction_type, // cash_in or cash_out
-        reference_type,   // sales_order, purchase_order, manual
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const {
+        client_id,
+        amount,
+        transaction_type,
+        payment_method = "cash",
+        bank_account_id = null,
+        cheque_number = null,
+        cheque_date = null,
+        payment_status = "cleared",
+        reference_type,
         reference_id,
         description,
-        transaction_date 
+        transaction_date,
       } = req.body;
+
+      // Validation
+      if (!client_id || !amount || !transaction_type) {
+        throw new Error("Client ID, amount, and transaction type are required");
+      }
+
+      if (!["cash_in", "cash_out"].includes(transaction_type)) {
+        throw new Error("Transaction type must be cash_in or cash_out");
+      }
+
+      const parsedAmount = parseFloat(amount);
+
+      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        throw new Error("Invalid amount");
+      }
+      if (payment_method === "bank" && !bank_account_id) {
+        throw new Error("Bank account is required for bank payments");
+      }
+      if (payment_method === "cheque" && !bank_account_id) {
+        throw new Error("Bank account is required for cheque payments");
+      }
 
       // Generate transaction number
       const transactionNumber = `PC-${Date.now()}`;
 
       // Get client details
-      const [client] = await executeQuery(
-        'SELECT * FROM clients WHERE id = ?',
-        [client_id]
+      const [client] = await connection.query(
+        "SELECT id, client_type, balance, company_name FROM clients WHERE id = ?",
+        [client_id],
       );
 
-      if (!client) {
-        return res.status(404).json({
-          success: false,
-          error: 'Client not found'
-        });
+      if (!client || client.length === 0) {
+        throw new Error("Client not found");
       }
 
-      // Create petty cash entry
-      const pettyCash = await PettyCash.create({
-        transaction_number: transactionNumber,
-        transaction_date: transaction_date || new Date().toISOString().split('T')[0],
-        transaction_type,
-        client_id,
-        amount,
-        reference_type,
-        reference_id,
-        description,
-        created_by: req.user?.id
-      });
+      console.log("=== PETTY CASH CREATE ===");
+      console.log("Client:", client[0].company_name);
+      console.log("Old Balance:", parseFloat(client[0].balance));
+      console.log("Amount:", parsedAmount);
+      console.log("Transaction Type:", transaction_type);
+      console.log("Note: Trigger will handle balance update");
 
-      // Balance will be updated by trigger, but we'll return updated balance
-      const [updatedClient] = await executeQuery(
-        'SELECT balance FROM clients WHERE id = ?',
-        [client_id]
+      // Create petty cash entry - TRIGGER will update balance
+      const [pettyCashResult] = await connection.query(
+        `INSERT INTO petty_cash 
+        (transaction_number, transaction_date, transaction_type, payment_method,
+   bank_account_id, cheque_number, cheque_date, payment_status, client_id, 
+         amount, reference_type, reference_id, description, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          transactionNumber,
+          transaction_date || new Date().toISOString().split("T")[0],
+          transaction_type,
+          payment_method,
+          bank_account_id,
+          cheque_number,
+          cheque_date,
+          payment_status,
+          client_id,
+          parsedAmount,
+          reference_type || "manual",
+          reference_id || null,
+          description || "",
+          req.user?.id || 1,
+        ],
       );
+
+      const pettyCashId = pettyCashResult.insertId;
+
+      await connection.commit();
+
+      // Get the complete record with updated balance
+      const [newRecord] = await connection.query(
+        `SELECT pc.*, c.company_name, c.client_type, c.balance as client_balance
+         FROM petty_cash pc
+         LEFT JOIN clients c ON pc.client_id = c.id
+         WHERE pc.id = ?`,
+        [pettyCashId],
+      );
+
+      console.log("New Balance:", parseFloat(newRecord[0].client_balance));
+      console.log("========================");
+
+      connection.release();
 
       res.status(201).json({
         success: true,
-        data: {
-          ...pettyCash,
-          client_name: client.company_name,
-          new_balance: updatedClient.balance
-        }
+        message: "Petty cash transaction created successfully",
+        data: newRecord[0],
       });
-
     } catch (error) {
-      next(error);
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+      console.error("Petty cash creation error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to create petty cash transaction",
+      });
     }
   }
 
-  // Get All Petty Cash Transactions
+  // ==================== UPDATE ====================
+  async update(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const { id } = req.params;
+      const {
+        client_id,
+        amount,
+        transaction_type,
+        payment_method,
+        bank_account_id,
+        cheque_number,
+        cheque_date,
+        payment_status,
+        description,
+        transaction_date,
+      } = req.body;
+
+      // Get existing transaction
+      const [existing] = await connection.query(
+        "SELECT * FROM petty_cash WHERE id = ?",
+        [id],
+      );
+
+      if (!existing || existing.length === 0) {
+        throw new Error("Transaction not found");
+      }
+
+      const oldRecord = existing[0];
+
+      console.log("=== PETTY CASH UPDATE ===");
+      console.log("Old Record:", oldRecord);
+      console.log("Note: Trigger will handle balance update");
+
+      // Update petty cash record - TRIGGER will handle balance
+      const newClientId = client_id || oldRecord.client_id;
+      const newAmount =
+        amount !== undefined
+          ? parseFloat(amount)
+          : parseFloat(oldRecord.amount);
+      const newType = transaction_type || oldRecord.transaction_type;
+      const newDescription =
+        description !== undefined ? description : oldRecord.description;
+      const newTransactionDate = transaction_date || oldRecord.transaction_date;
+      const newPaymentMethod =
+        payment_method !== undefined
+          ? payment_method
+          : oldRecord.payment_method;
+      const newBankAccountId =
+        bank_account_id !== undefined
+          ? bank_account_id
+          : oldRecord.bank_account_id;
+      const newChequeNumber =
+        cheque_number !== undefined ? cheque_number : oldRecord.cheque_number;
+      const newChequeDate =
+        cheque_date !== undefined ? cheque_date : oldRecord.cheque_date;
+      const newPaymentStatus =
+        payment_status !== undefined
+          ? payment_status
+          : oldRecord.payment_status;
+
+      await connection.query(
+        `UPDATE petty_cash 
+   SET client_id = ?, amount = ?, transaction_type = ?, 
+       payment_method = ?, bank_account_id = ?, cheque_number = ?,
+       cheque_date = ?, payment_status = ?,
+       description = ?, transaction_date = ?
+   WHERE id = ?`,
+        [
+          newClientId,
+          newAmount,
+          newType,
+          newPaymentMethod,
+          newBankAccountId,
+          newChequeNumber,
+          newChequeDate,
+          newPaymentStatus,
+          newDescription,
+          newTransactionDate,
+          id,
+        ],
+      );
+
+      await connection.commit();
+
+      // Get updated record
+      const [updatedRecord] = await connection.query(
+        `SELECT pc.*, c.company_name, c.client_type, c.balance as client_balance
+         FROM petty_cash pc
+         LEFT JOIN clients c ON pc.client_id = c.id
+         WHERE pc.id = ?`,
+        [id],
+      );
+
+      console.log(
+        "Updated Balance:",
+        parseFloat(updatedRecord[0].client_balance),
+      );
+      console.log("========================");
+
+      connection.release();
+
+      res.json({
+        success: true,
+        message: "Petty cash transaction updated successfully",
+        data: updatedRecord[0],
+      });
+    } catch (error) {
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+      console.error("Petty cash update error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to update petty cash transaction",
+      });
+    }
+  }
+
+  // ==================== DELETE ====================
+  async delete(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const { id } = req.params;
+
+      // Get existing transaction
+      const [existing] = await connection.query(
+        "SELECT * FROM petty_cash WHERE id = ?",
+        [id],
+      );
+
+      if (!existing || existing.length === 0) {
+        throw new Error("Transaction not found");
+      }
+
+      const record = existing[0];
+
+      console.log("=== PETTY CASH DELETE ===");
+      console.log("Deleting Record:", record);
+      console.log("Note: Trigger will handle balance reversal");
+
+      // Delete the record - TRIGGER will reverse balance
+      await connection.query("DELETE FROM petty_cash WHERE id = ?", [id]);
+
+      await connection.commit();
+      connection.release();
+
+      console.log("Transaction deleted successfully");
+      console.log("========================");
+
+      res.json({
+        success: true,
+        message: "Petty cash transaction deleted successfully",
+      });
+    } catch (error) {
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+      console.error("Petty cash delete error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to delete petty cash transaction",
+      });
+    }
+  }
+
+  // ==================== GET ALL ====================
   async getAll(req, res, next) {
     try {
-      const { 
-        limit = 50, 
-        offset = 0, 
+      const {
+        limit = 50,
+        offset = 0,
         client_id,
         transaction_type,
         start_date,
-        end_date 
+        end_date,
       } = req.query;
 
-      let where = '1=1';
+      let where = "1=1";
       let params = [];
 
       if (client_id) {
-        where += ' AND client_id = ?';
+        where += " AND pc.client_id = ?";
         params.push(client_id);
       }
 
       if (transaction_type) {
-        where += ' AND transaction_type = ?';
+        where += " AND pc.transaction_type = ?";
         params.push(transaction_type);
       }
 
       if (start_date && end_date) {
-        where += ' AND transaction_date BETWEEN ? AND ?';
+        where += " AND pc.transaction_date BETWEEN ? AND ?";
         params.push(start_date, end_date);
       }
 
@@ -102,47 +343,48 @@ class PettyCashController {
         SELECT pc.*, 
                c.company_name,
                c.client_type,
+               c.contact_person,
+               ba.account_name,
+               ba.bank_name,
+               ba.account_number,
                u.full_name as created_by_name
         FROM petty_cash pc
         LEFT JOIN clients c ON pc.client_id = c.id
+        LEFT JOIN bank_accounts ba ON pc.bank_account_id = ba.id
         LEFT JOIN users u ON pc.created_by = u.id
         WHERE ${where}
         ORDER BY pc.transaction_date DESC, pc.created_at DESC
         LIMIT ? OFFSET ?
       `;
 
-      const transactions = await executeQuery(sql, [...params, parseInt(limit), parseInt(offset)]);
-      const total = await PettyCash.count(where, params);
+      const transactions = await executeQuery(sql, [
+        ...params,
+        parseInt(limit),
+        parseInt(offset),
+      ]);
 
-      // Calculate totals
-      const totalsSql = `
-        SELECT 
-          SUM(CASE WHEN transaction_type = 'cash_in' THEN amount ELSE 0 END) as total_in,
-          SUM(CASE WHEN transaction_type = 'cash_out' THEN amount ELSE 0 END) as total_out
-        FROM petty_cash
+      const countSql = `
+        SELECT COUNT(*) as total
+        FROM petty_cash pc
         WHERE ${where}
       `;
-      const [totals] = await executeQuery(totalsSql, params);
+      const [{ total }] = await executeQuery(countSql, params);
 
       res.json({
         success: true,
         data: {
           transactions,
           total,
-          summary: {
-            total_cash_in: parseFloat(totals.total_in || 0),
-            total_cash_out: parseFloat(totals.total_out || 0),
-            net_cash: parseFloat(totals.total_in || 0) - parseFloat(totals.total_out || 0)
-          }
-        }
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+        },
       });
-
     } catch (error) {
       next(error);
     }
   }
 
-  // Get Single Transaction
+  // ==================== GET BY ID ====================
   async getById(req, res, next) {
     try {
       const { id } = req.params;
@@ -151,10 +393,16 @@ class PettyCashController {
         SELECT pc.*, 
                c.company_name,
                c.client_type,
+               c.contact_person,
                c.balance as current_balance,
+               ba.account_name,
+         ba.bank_name,
+         ba.account_number,
+         ba.current_balance as bank_balance,
                u.full_name as created_by_name
         FROM petty_cash pc
         LEFT JOIN clients c ON pc.client_id = c.id
+        LEFT JOIN bank_accounts ba ON pc.bank_account_id = ba.id
         LEFT JOIN users u ON pc.created_by = u.id
         WHERE pc.id = ?
       `;
@@ -164,28 +412,66 @@ class PettyCashController {
       if (!transaction) {
         return res.status(404).json({
           success: false,
-          error: 'Transaction not found'
+          error: "Transaction not found",
         });
       }
 
       res.json({ success: true, data: transaction });
-
     } catch (error) {
       next(error);
     }
   }
 
-  // Get Client Cash Flow
+  // ==================== GET SUMMARY ====================
+  async getSummary(req, res, next) {
+    try {
+      const { start_date, end_date } = req.query;
+
+      let dateFilter = "";
+      let params = [];
+
+      if (start_date && end_date) {
+        dateFilter = "WHERE transaction_date BETWEEN ? AND ?";
+        params = [start_date, end_date];
+      } else {
+        dateFilter =
+          "WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
+      }
+
+      const sql = `
+        SELECT 
+          SUM(CASE WHEN transaction_type = 'cash_in' THEN amount ELSE 0 END) as total_cash_in,
+          SUM(CASE WHEN transaction_type = 'cash_out' THEN amount ELSE 0 END) as total_cash_out,
+          COUNT(CASE WHEN transaction_type = 'cash_in' THEN 1 END) as cash_in_count,
+          COUNT(CASE WHEN transaction_type = 'cash_out' THEN 1 END) as cash_out_count,
+          COUNT(*) as total_transactions
+        FROM petty_cash
+        ${dateFilter}
+      `;
+
+      const [summary] = await executeQuery(sql, params);
+
+      summary.net_cash =
+        parseFloat(summary.total_cash_in || 0) -
+        parseFloat(summary.total_cash_out || 0);
+
+      res.json({ success: true, data: summary });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // ==================== GET CLIENT CASH FLOW ====================
   async getClientCashFlow(req, res, next) {
     try {
       const { client_id } = req.params;
       const { start_date, end_date } = req.query;
 
-      let dateFilter = '';
+      let dateFilter = "";
       let params = [client_id];
 
       if (start_date && end_date) {
-        dateFilter = 'AND transaction_date BETWEEN ? AND ?';
+        dateFilter = "AND transaction_date BETWEEN ? AND ?";
         params.push(start_date, end_date);
       }
 
@@ -202,30 +488,20 @@ class PettyCashController {
 
       const transactions = await executeQuery(sql, params);
 
-      // Calculate running balance
-      let runningBalance = 0;
-      if (transactions.length > 0) {
-        runningBalance = parseFloat(transactions[0].current_balance);
-      }
-
       res.json({
         success: true,
-        data: {
-          transactions,
-          current_balance: runningBalance
-        }
+        data: transactions,
       });
-
     } catch (error) {
       next(error);
     }
   }
 
-  // Daily Cash Summary
+  // ==================== DAILY SUMMARY ====================
   async getDailySummary(req, res, next) {
     try {
       const { date } = req.query;
-      const targetDate = date || new Date().toISOString().split('T')[0];
+      const targetDate = date || new Date().toISOString().split("T")[0];
 
       const sql = `
         SELECT 
@@ -243,19 +519,19 @@ class PettyCashController {
         date: targetDate,
         cash_in: { count: 0, total: 0 },
         cash_out: { count: 0, total: 0 },
-        net: 0
+        net: 0,
       };
 
-      summary.forEach(item => {
-        if (item.transaction_type === 'cash_in') {
-          response.cash_in = { 
-            count: item.count, 
-            total: parseFloat(item.total) 
+      summary.forEach((item) => {
+        if (item.transaction_type === "cash_in") {
+          response.cash_in = {
+            count: item.count,
+            total: parseFloat(item.total),
           };
         } else {
-          response.cash_out = { 
-            count: item.count, 
-            total: parseFloat(item.total) 
+          response.cash_out = {
+            count: item.count,
+            total: parseFloat(item.total),
           };
         }
       });
@@ -263,31 +539,42 @@ class PettyCashController {
       response.net = response.cash_in.total - response.cash_out.total;
 
       res.json({ success: true, data: response });
-
     } catch (error) {
       next(error);
     }
   }
 
-  // Cash Book Report
+  // ==================== CASH BOOK ====================
   async getCashBook(req, res, next) {
     try {
       const { start_date, end_date } = req.query;
 
-      const dateFilter = start_date && end_date 
-        ? 'WHERE transaction_date BETWEEN ? AND ?'
-        : 'WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)';
+      const dateFilter =
+        start_date && end_date
+          ? "WHERE transaction_date BETWEEN ? AND ?"
+          : "WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
 
       const params = start_date && end_date ? [start_date, end_date] : [];
 
       const sql = `
-        SELECT * FROM v_petty_cash_summary ${dateFilter} ORDER BY date DESC
+        SELECT 
+          transaction_date as date,
+          SUM(CASE WHEN transaction_type = 'cash_in' THEN amount ELSE 0 END) as cash_in,
+          SUM(CASE WHEN transaction_type = 'cash_out' THEN amount ELSE 0 END) as cash_out,
+          COUNT(*) as transactions
+        FROM petty_cash
+        ${dateFilter}
+        GROUP BY transaction_date
+        ORDER BY transaction_date DESC
       `;
 
       const cashBook = await executeQuery(sql, params);
 
-      res.json({ success: true, data: cashBook });
+      cashBook.forEach((day) => {
+        day.net = parseFloat(day.cash_in) - parseFloat(day.cash_out);
+      });
 
+      res.json({ success: true, data: cashBook });
     } catch (error) {
       next(error);
     }

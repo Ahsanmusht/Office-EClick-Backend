@@ -26,6 +26,9 @@ const usersRoutes = require("./users");
 const pettyCashRoutes = require('./pettyCash');
 const wastageReportRoutes = require('./wastageReport');
 const BankRoutes = require('./bank');
+const dashboardRoutes = require('./dashboard');
+const printRoutes = require('./print');
+
 
 router.use("/auth", authRoutes);
 router.use("/menu", menuRoutes);
@@ -52,5 +55,7 @@ router.use("/users", usersRoutes);
 router.use('/petty-cash', pettyCashRoutes);
 router.use('/wastage-report', wastageReportRoutes);
 router.use('/bank', BankRoutes);
+router.use('/dashboard', dashboardRoutes);
+router.use('/print', printRoutes);
 
 module.exports = router;

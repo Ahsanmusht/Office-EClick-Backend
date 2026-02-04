@@ -1,5 +1,5 @@
 const BaseModel = require("../models/BaseModel");
-const { executeQuery, executeTransaction } = require("../config/database");
+const { executeQuery, executeTransaction, getConnection } = require("../config/database");
 
 const SalaryRecord = new BaseModel("salary_records");
 const RecurringSchedule = new BaseModel("recurring_expense_schedules");
@@ -52,7 +52,7 @@ class SalaryController {
 
   async getSalaries(req, res, next) {
     try {
-      const { month, user_id, status, limit = 50, offset = 0 } = req.query;
+      const { month, employee_id, status, limit = 50, offset = 0 } = req.query;
 
       let where = "1=1";
       let params = [];
@@ -62,9 +62,9 @@ class SalaryController {
         params.push(month);
       }
 
-      if (user_id) {
-        where += " AND user_id = ?";
-        params.push(user_id);
+      if (employee_id) {
+        where += " AND employee_id = ?";
+        params.push(employee_id);
       }
 
       if (status) {
@@ -72,13 +72,21 @@ class SalaryController {
         params.push(status);
       }
 
+      // const sql = `
+      //   SELECT sr.*, u.full_name, u.email, ba.bank_name, ba.account_number
+      //   FROM salary_records sr
+      //   LEFT JOIN users u ON sr.user_id = u.id
+      //   LEFT JOIN bank_accounts ba ON sr.bank_account_id = ba.id
+      //   WHERE ${where}
+      //   ORDER BY sr.month DESC, u.full_name ASC
+      //   LIMIT ? OFFSET ?
+      // `;
       const sql = `
-        SELECT sr.*, u.full_name, u.email, ba.bank_name, ba.account_number
+        SELECT sr.*, e.full_name, e.email, e.bank_name, e.account_number
         FROM salary_records sr
-        LEFT JOIN users u ON sr.user_id = u.id
-        LEFT JOIN bank_accounts ba ON sr.bank_account_id = ba.id
+        LEFT JOIN employees e ON sr.employee_id = e.id
         WHERE ${where}
-        ORDER BY sr.month DESC, u.full_name ASC
+        ORDER BY sr.month DESC, e.full_name ASC
         LIMIT ? OFFSET ?
       `;
 
@@ -149,7 +157,7 @@ class SalaryController {
       if (payment_method === "bank_transfer" && bank_account_id) {
         const bankAccount = await executeQuery(
           "SELECT current_balance FROM bank_accounts WHERE id = ?",
-          [bank_account_id]
+          [bank_account_id],
         );
 
         if (bankAccount.length > 0) {
@@ -440,7 +448,7 @@ class SalaryController {
 
       const totalAmount = upcoming.reduce(
         (sum, item) => sum + parseFloat(item.amount),
-        0
+        0,
       );
 
       res.json({
@@ -449,6 +457,322 @@ class SalaryController {
           upcoming_expenses: upcoming,
           total_amount: totalAmount,
           count: upcoming.length,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+  // Add these new methods to existing SalaryController
+
+  async generateSalaryForEmployee(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const {
+        employee_id,
+        month, // YYYY-MM-01
+        bonus = 0,
+        overtime = 0,
+        leaves_deduction = 0,
+        loan_deduction = 0,
+        other_deductions = 0,
+        notes,
+      } = req.body;
+
+      // Get employee details
+      const [employee] = await connection.query(
+        "SELECT * FROM employees WHERE id = ? AND is_active = 1",
+        [employee_id],
+      );
+
+      if (!employee || employee.length === 0) {
+        throw new Error("Employee not found");
+      }
+
+      const emp = employee[0];
+
+      // Check if already generated
+      const [existing] = await connection.query(
+        "SELECT id FROM salary_records WHERE employee_id = ? AND month = ?",
+        [employee_id, month],
+      );
+
+      if (existing && existing.length > 0) {
+        throw new Error("Salary already generated for this month");
+      }
+
+      // Calculate salary
+      const basic_salary = parseFloat(emp.basic_salary);
+      const allowances = parseFloat(emp.allowances || 0);
+      const bonusAmt = parseFloat(bonus);
+      const overtimeAmt = parseFloat(overtime);
+
+      const gross_salary = basic_salary + allowances + bonusAmt + overtimeAmt;
+      
+      const total_deductions =
+        parseFloat(leaves_deduction) +
+        parseFloat(loan_deduction) +
+        parseFloat(other_deductions);
+
+      const net_salary = gross_salary - total_deductions;
+      // Insert salary record
+      const [result] = await connection.query(
+        `INSERT INTO salary_records 
+      (employee_id, user_id, month, 
+       basic_salary, allowances, bonus, overtime,
+       deductions, leaves_deduction, loan_deduction, other_deductions,
+       gross_salary, net_salary, status, notes, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        [
+          employee_id,
+          req.user?.id || null,
+          month,
+          basic_salary,
+          allowances,
+          bonusAmt,
+          overtimeAmt,
+          total_deductions,
+          leaves_deduction,
+          loan_deduction,
+          other_deductions,
+          gross_salary,
+          net_salary,
+          notes || null,
+          req.user?.id,
+        ],
+      );
+
+      await connection.commit();
+      console.log(result);
+      
+      const [newSalary] = await connection.query(
+        "SELECT * FROM salary_records WHERE id = ?",
+        [result.insertId],
+      );
+
+      connection.release();
+
+      res.status(201).json({
+        success: true,
+        message: "Salary generated successfully",
+        data: newSalary[0],
+      });
+    } catch (error) {
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+      console.error("Salary generation error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to generate salary",
+      });
+    }
+  }
+
+  async paySalary(req, res, next) {
+    let connection;
+    try {
+      connection = await getConnection();
+      await connection.beginTransaction();
+
+      const { id } = req.params;
+      const {
+        payment_type, // 'cash', 'bank', 'cheque'
+        bank_account_id,
+        cheque_number,
+        cheque_date,
+        payment_date,
+        client_id
+      } = req.body;
+
+      // Get salary record
+      const [salary] = await connection.query(
+        `SELECT sr.*, e.full_name, e.emp_code 
+       FROM salary_records sr
+       JOIN employees e ON sr.employee_id = e.id
+       WHERE sr.id = ?`,
+        [id],
+      );
+
+      if (!salary || salary.length === 0) {
+        throw new Error("Salary record not found");
+      }
+
+      const salaryRecord = salary[0];
+
+      if (salaryRecord.status === "paid") {
+        throw new Error("Salary already paid");
+      }
+
+      const payDate = payment_date || new Date().toISOString().split("T")[0];
+
+      // Update salary record
+      await connection.query(
+        `UPDATE salary_records 
+       SET status = 'paid',
+           payment_date = ?,
+           payment_type = ?,
+           payment_method = ?,
+           bank_account_id = ?,
+           cheque_number = ?,
+           cheque_date = ?
+       WHERE id = ?`,
+        [
+          payDate,
+          payment_type,
+          payment_type, // Also update payment_method for compatibility
+          bank_account_id || null,
+          cheque_number || null,
+          cheque_date || null,
+          id,
+        ],
+      );
+
+      // Create petty cash entry
+      const pcNumber = `SAL-${Date.now()}`;
+
+      await connection.query(
+        `INSERT INTO petty_cash 
+      (transaction_number, transaction_date, transaction_type, payment_method,
+       bank_account_id, cheque_number, cheque_date, payment_status,
+       amount, reference_type, reference_id, description, created_by, client_id)
+      VALUES (?, ?, 'cash_out', ?, ?, ?, ?, 'cleared', ?, 'salary', ?, ?, ?, ?)`,
+        [
+          pcNumber,
+          payDate,
+          payment_type,
+          bank_account_id || null,
+          cheque_number || null,
+          cheque_date || null,
+          salaryRecord.net_salary,
+          id,
+          `Salary payment for ${salaryRecord.full_name} (${salaryRecord.emp_code}) - ${salaryRecord.month}`,
+          req.user?.id,
+          client_id
+        ],
+      );
+
+      await connection.commit();
+      connection.release();
+
+      res.json({
+        success: true,
+        message: "Salary paid successfully",
+        data: {
+          salary_id: id,
+          employee: salaryRecord.full_name,
+          amount: salaryRecord.net_salary,
+          payment_type,
+          payment_date: payDate,
+        },
+      });
+    } catch (error) {
+      if (connection) {
+        await connection.rollback();
+        connection.release();
+      }
+      console.error("Salary payment error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to pay salary",
+      });
+    }
+  }
+
+  async getSalaryReport(req, res, next) {
+    try {
+      const { start_month, end_month, department, employee_id, status } =
+        req.query;
+
+      let where = "1=1";
+      let params = [];
+
+      if (start_month && end_month) {
+        where += " AND sr.month BETWEEN ? AND ?";
+        params.push(start_month, end_month);
+      }
+
+      if (department) {
+        where += " AND e.department = ?";
+        params.push(department);
+      }
+
+      if (employee_id) {
+        where += " AND sr.employee_id = ?";
+        params.push(employee_id);
+      }
+
+      if (status) {
+        where += " AND sr.status = ?";
+        params.push(status);
+      }
+
+      const sql = `
+      SELECT 
+        sr.*,
+        e.emp_code,
+        e.full_name,
+        e.department,
+        e.designation,
+        ba.bank_name,
+        ba.account_number,
+        CASE 
+          WHEN sr.payment_type = 'bank' THEN CONCAT(ba.bank_name, ' - ', ba.account_number)
+          WHEN sr.payment_type = 'cheque' THEN CONCAT('Cheque #', sr.cheque_number)
+          ELSE 'Cash'
+        END as payment_details
+      FROM salary_records sr
+      JOIN employees e ON sr.employee_id = e.id
+      LEFT JOIN bank_accounts ba ON sr.bank_account_id = ba.id
+      WHERE ${where}
+      ORDER BY sr.month DESC, e.full_name ASC
+    `;
+
+      const records = await executeQuery(sql, params);
+
+      // Calculate totals
+      const totals = {
+        total_employees: new Set(records.map((r) => r.employee_id)).size,
+        total_gross_salary: records.reduce(
+          (sum, r) => sum + parseFloat(r.gross_salary || 0),
+          0,
+        ),
+        total_deductions: records.reduce(
+          (sum, r) => sum + parseFloat(r.deductions || 0),
+          0,
+        ),
+        total_net_salary: records.reduce(
+          (sum, r) => sum + parseFloat(r.net_salary || 0),
+          0,
+        ),
+        total_paid: records
+          .filter((r) => r.status === "paid")
+          .reduce((sum, r) => sum + parseFloat(r.net_salary), 0),
+        total_pending: records
+          .filter((r) => r.status === "pending")
+          .reduce((sum, r) => sum + parseFloat(r.net_salary), 0),
+        by_payment_type: {
+          cash: records
+            .filter((r) => r.payment_type === "cash" && r.status === "paid")
+            .reduce((sum, r) => sum + parseFloat(r.net_salary), 0),
+          bank: records
+            .filter((r) => r.payment_type === "bank" && r.status === "paid")
+            .reduce((sum, r) => sum + parseFloat(r.net_salary), 0),
+          cheque: records
+            .filter((r) => r.payment_type === "cheque" && r.status === "paid")
+            .reduce((sum, r) => sum + parseFloat(r.net_salary), 0),
+        },
+      };
+
+      res.json({
+        success: true,
+        data: {
+          records,
+          totals,
         },
       });
     } catch (error) {

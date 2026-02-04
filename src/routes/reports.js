@@ -1,8 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const ReportController = require('../controllers/ReportController');
+const EnhancedReportController = require('../controllers/EnhancedReportController');
 const auth = require('../middleware/auth');
 const { checkPermission, checkAnyPermission } = require('../middleware/permissions');
+
+router.get('/sales/detailed', auth, checkPermission('sales.view'), EnhancedReportController.getSalesReport);
+router.get('/purchases/detailed', auth, checkPermission('purchases.view'), EnhancedReportController.getPurchaseReport);
+router.get('/ledger/detailed', auth, checkPermission('finance.transactions.view'), EnhancedReportController.getLedgerReport);
+router.get('/stock/detailed', auth, checkPermission('stock.view'), EnhancedReportController.getStockReport);
 
 // Dashboard 
 router.get('/dashboard', auth, checkAnyPermission([

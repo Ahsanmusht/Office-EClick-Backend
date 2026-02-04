@@ -6,10 +6,10 @@ const { checkPermission } = require('../middleware/permissions');
 
 // Salary Management
 router.get('/salaries', auth, checkPermission('salary.view'), SalaryController.getSalaries);
-router.post('/salaries/generate', auth, checkPermission('salary.generate'), SalaryController.generateMonthlySalaries);
+router.get('/salaries/report', auth, checkPermission('salary.view'), SalaryController.getSalaryReport);
+router.post('/salaries/generate', auth, checkPermission('salary.generate'), SalaryController.generateSalaryForEmployee);
 router.put('/salaries/:id', auth, checkPermission('salary.generate'), SalaryController.updateSalary);
 router.post('/salaries/:id/pay', auth, checkPermission('salary.pay'), SalaryController.paySalary);
-router.get('/salaries/report', auth, checkPermission('salary.view'), SalaryController.getSalaryReport);
 
 // Recurring Expenses - Finance permission chahiye
 router.get('/recurring-schedules', auth, checkPermission('expenses.view'), SalaryController.getRecurringSchedules);

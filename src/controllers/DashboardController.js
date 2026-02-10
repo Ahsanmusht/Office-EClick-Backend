@@ -3,12 +3,20 @@ const { executeQuery } = require('../config/database');
 class DashboardController {
   async getDashboardStats(req, res, next) {
     try {
-      const { start_date, end_date } = req.query;
+      const { start_date, end_date, chart_type = 'sales', chart_start_date, chart_end_date } = req.query;
       
-      // Default to last 30 days if no dates provided
+      // Default to last 30 days if no dates provided (for boxes)
       const dateFilter = start_date && end_date 
         ? `BETWEEN '${start_date}' AND '${end_date}'`
         : `>= DATE_SUB(CURDATE(), INTERVAL 30 DAY)`;
+      
+      // Chart date filter - defaults to current month
+      const today = new Date();
+      const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      
+      const chartStartDate = chart_start_date || firstDayOfMonth.toISOString().split('T')[0];
+      const chartEndDate = chart_end_date || lastDayOfMonth.toISOString().split('T')[0];
       
       // 1. SALES STATS
       const salesSql = `
@@ -63,17 +71,45 @@ class DashboardController {
       `;
       const [clientBalances] = await executeQuery(clientBalancesSql);
 
-      // 6. MONTHLY CHART DATA (Last 7 days)
-      const chartSql = `
-        SELECT 
-          DATE(order_date) as date,
-          COALESCE(SUM(total_amount), 0) as amount
-        FROM sales_orders
-        WHERE order_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
-        GROUP BY DATE(order_date)
-        ORDER BY date ASC
-      `;
-      const chartData = await executeQuery(chartSql);
+      // 6. DYNAMIC CHART DATA based on chart_type
+      let chartData = [];
+      
+      if (chart_type === 'sales') {
+        const chartSql = `
+          SELECT 
+            DATE(order_date) as date,
+            COALESCE(SUM(total_amount), 0) as amount
+          FROM sales_orders
+          WHERE order_date BETWEEN ? AND ?
+          GROUP BY DATE(order_date)
+          ORDER BY date ASC
+        `;
+        chartData = await executeQuery(chartSql, [chartStartDate, chartEndDate]);
+      } 
+      else if (chart_type === 'purchase') {
+        const chartSql = `
+          SELECT 
+            DATE(order_date) as date,
+            COALESCE(SUM(total_amount), 0) as amount
+          FROM purchase_orders
+          WHERE order_date BETWEEN ? AND ?
+          GROUP BY DATE(order_date)
+          ORDER BY date ASC
+        `;
+        chartData = await executeQuery(chartSql, [chartStartDate, chartEndDate]);
+      }
+      else if (chart_type === 'wastage') {
+        const chartSql = `
+          SELECT 
+            DATE(pr.production_date) as date,
+            COALESCE(SUM(pr.wastage_kg), 0) as amount
+          FROM production_records pr
+          WHERE pr.production_date BETWEEN ? AND ?
+          GROUP BY DATE(pr.production_date)
+          ORDER BY date ASC
+        `;
+        chartData = await executeQuery(chartSql, [chartStartDate, chartEndDate]);
+      }
 
       const netProfit = parseFloat(financialStats.total_revenue) - parseFloat(financialStats.total_expenses);
       
@@ -84,7 +120,7 @@ class DashboardController {
             total_sales: {
               value: parseFloat(salesStats.total_sales || 0).toFixed(2),
               count: salesStats.total_orders || 0,
-              percentage: 0, // Calculate based on previous period if needed
+              percentage: 0,
               label: 'Total Sales'
             },
             total_purchases: {
@@ -105,6 +141,9 @@ class DashboardController {
             }
           },
           chart: {
+            type: chart_type,
+            start_date: chartStartDate,
+            end_date: chartEndDate,
             labels: chartData.map(d => new Date(d.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' })),
             data: chartData.map(d => parseFloat(d.amount))
           },

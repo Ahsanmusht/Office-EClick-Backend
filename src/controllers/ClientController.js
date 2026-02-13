@@ -5,10 +5,15 @@ const { executeQuery } = require("../config/database");
 const Client = new BaseModel("clients");
 
 class UpdatedClientController {
-  
   async getAll(req, res, next) {
     try {
-      const { limit = 20, offset = 0, client_type, search, has_balance } = req.query;
+      const {
+        limit = 20,
+        offset = 0,
+        client_type,
+        search,
+        has_balance,
+      } = req.query;
 
       let where = "is_active = 1";
       let params = [];
@@ -24,8 +29,8 @@ class UpdatedClientController {
         params.push(`%${search}%`, `%${search}%`, `%${search}%`);
       }
 
-      if (has_balance === 'true') {
-        where += ' AND balance != 0';
+      if (has_balance === "true") {
+        where += " AND balance != 0";
       }
 
       const clients = await Client.findAll({
@@ -47,7 +52,7 @@ class UpdatedClientController {
   async getById(req, res, next) {
     try {
       const { id } = req.params;
-      
+
       const sql = `
         SELECT c.*,
                CASE 
@@ -59,7 +64,7 @@ class UpdatedClientController {
         FROM clients c
         WHERE c.id = ?
       `;
-      
+
       const [client] = await executeQuery(sql, [id]);
 
       if (!client) {
@@ -89,15 +94,14 @@ class UpdatedClientController {
       `;
       const [summary] = await executeQuery(summarySql, [id]);
 
-      res.json({ 
-        success: true, 
-        data: { 
-          ...client, 
+      res.json({
+        success: true,
+        data: {
+          ...client,
           recent_transactions: transactions,
-          transaction_summary: summary
-        } 
+          transaction_summary: summary,
+        },
       });
-      
     } catch (error) {
       next(error);
     }
@@ -107,7 +111,12 @@ class UpdatedClientController {
     try {
       // Generate client code if not provided
       if (!req.body.client_code) {
-        const prefix = req.body.client_type === "supplier" ? "SUP" : "CUS";
+        const prefixMap = {
+          supplier: "SUP",
+          customer: "CUS",
+          expense: "EXP",
+        };
+        const prefix = prefixMap[req.body.client_type] || "CLI";
         req.body.client_code = `${prefix}-${Date.now()}`;
       }
 
@@ -124,10 +133,10 @@ class UpdatedClientController {
   async update(req, res, next) {
     try {
       const { id } = req.params;
-      
+
       // Don't allow direct balance update through this endpoint
       delete req.body.balance;
-      
+
       const client = await Client.update(id, req.body);
 
       if (!client) {
@@ -146,17 +155,17 @@ class UpdatedClientController {
   async delete(req, res, next) {
     try {
       const { id } = req.params;
-      
+
       // Check if client has balance
       const [client] = await executeQuery(
-        'SELECT balance FROM clients WHERE id = ?',
-        [id]
+        "SELECT balance FROM clients WHERE id = ?",
+        [id],
       );
 
       if (client && client.balance != 0) {
         return res.status(400).json({
           success: false,
-          error: `Cannot delete client with pending balance: ${client.balance}`
+          error: `Cannot delete client with pending balance: ${client.balance}`,
         });
       }
 
@@ -173,11 +182,11 @@ class UpdatedClientController {
     try {
       const { client_type } = req.query;
 
-      let where = 'is_active = 1 AND balance != 0';
+      let where = "is_active = 1 AND balance != 0";
       let params = [];
 
       if (client_type) {
-        where += ' AND client_type = ?';
+        where += " AND client_type = ?";
         params.push(client_type);
       }
 
@@ -204,28 +213,27 @@ class UpdatedClientController {
       const totals = {
         total_receivables: 0,
         total_payables: 0,
-        net_position: 0
+        net_position: 0,
       };
 
-      clients.forEach(client => {
+      clients.forEach((client) => {
         const balance = parseFloat(client.balance);
-        if (client.client_type === 'customer' && balance > 0) {
+        if (client.client_type === "customer" && balance > 0) {
           totals.total_receivables += balance;
-        } else if (client.client_type === 'supplier' && balance > 0) {
+        } else if (client.client_type === "supplier" && balance > 0) {
           totals.total_payables += balance;
         }
       });
 
       totals.net_position = totals.total_receivables - totals.total_payables;
 
-      res.json({ 
-        success: true, 
-        data: { 
+      res.json({
+        success: true,
+        data: {
           clients,
-          totals
-        } 
+          totals,
+        },
       });
-
     } catch (error) {
       next(error);
     }
@@ -238,14 +246,14 @@ class UpdatedClientController {
       const { start_date, end_date } = req.query;
 
       const [client] = await executeQuery(
-        'SELECT * FROM clients WHERE id = ?',
-        [id]
+        "SELECT * FROM clients WHERE id = ?",
+        [id],
       );
 
       if (!client) {
         return res.status(404).json({
           success: false,
-          error: 'Client not found'
+          error: "Client not found",
         });
       }
 
@@ -261,11 +269,11 @@ class UpdatedClientController {
       }
 
       // Get all transactions
-      let dateFilter = '';
+      let dateFilter = "";
       let params = [id];
 
       if (start_date && end_date) {
-        dateFilter = 'AND transaction_date BETWEEN ? AND ?';
+        dateFilter = "AND transaction_date BETWEEN ? AND ?";
         params.push(start_date, end_date);
       }
 
@@ -314,31 +322,31 @@ class UpdatedClientController {
       const transactions = await executeQuery(sql, [
         ...params,
         ...params,
-        ...params
+        ...params,
       ]);
 
       // Calculate running balance
       let runningBalance = openingBalance;
-      const statement = transactions.map(txn => {
-        if (client.client_type === 'customer') {
+      const statement = transactions.map((txn) => {
+        if (client.client_type === "customer") {
           // For customer: sale increases balance, payment decreases
-          if (txn.type === 'sale') {
+          if (txn.type === "sale") {
             runningBalance += parseFloat(txn.amount);
-          } else if (txn.type === 'payment') {
+          } else if (txn.type === "payment") {
             runningBalance -= parseFloat(txn.amount);
           }
         } else {
           // For supplier: purchase increases balance, payment decreases
-          if (txn.type === 'purchase') {
+          if (txn.type === "purchase") {
             runningBalance += parseFloat(txn.amount);
-          } else if (txn.type === 'payment') {
+          } else if (txn.type === "payment") {
             runningBalance -= parseFloat(txn.amount);
           }
         }
 
         return {
           ...txn,
-          running_balance: runningBalance.toFixed(2)
+          running_balance: runningBalance.toFixed(2),
         };
       });
 
@@ -349,14 +357,13 @@ class UpdatedClientController {
             id: client.id,
             code: client.client_code,
             name: client.company_name,
-            type: client.client_type
+            type: client.client_type,
           },
           opening_balance: openingBalance,
           closing_balance: client.balance,
-          statement
-        }
+          statement,
+        },
       });
-
     } catch (error) {
       next(error);
     }

@@ -276,17 +276,24 @@ class UpdatedSalesController {
       }
 
       const sql = `
-      SELECT 
-        so.*,
-        c.contact_person AS customer_name,
-        w.name AS warehouse_name
-      FROM sales_orders so
-      LEFT JOIN clients c ON so.customer_id = c.id
-      LEFT JOIN warehouses w ON so.warehouse_id = w.id
-      WHERE ${where}
-      ORDER BY so.id DESC
-      LIMIT ? OFFSET ?
-    `;
+SELECT 
+  so.*,
+  c.contact_person AS customer_name,
+  w.name AS warehouse_name,
+  CASE 
+    WHEN pc.id IS NOT NULL THEN 'paid'
+    ELSE 'unpaid'
+  END as payment_status
+FROM sales_orders so
+LEFT JOIN clients c ON so.customer_id = c.id
+LEFT JOIN warehouses w ON so.warehouse_id = w.id
+LEFT JOIN petty_cash pc 
+  ON pc.reference_type = 'sales_order' 
+  AND pc.reference_id = so.id
+WHERE ${where}
+ORDER BY so.id DESC
+LIMIT ? OFFSET ?
+`;
 
       const orders = await executeQuery(sql, [...params, limit, offset]);
 
